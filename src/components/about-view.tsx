@@ -2,235 +2,247 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
-import { Briefcase, Dumbbell, ScanLine, MessageSquare, CheckCircle2, Loader2, ExternalLink, Activity } from 'lucide-react';
 import { submitContactForm } from '@/app/actions/contact';
-
-type FormStatus = 'idle' | 'submitting' | 'success' | 'error';
+import { useUser } from '@/firebase';
+import { useToast } from '@/hooks/use-toast';
+import {
+  Cpu,
+  Leaf,
+  Loader2,
+  Lock,
+  MessageSquare,
+  Scale,
+  Send,
+  Sparkles,
+  Wine,
+} from 'lucide-react';
 
 export function AboutView() {
+  const { user } = useUser();
+  const { toast } = useToast();
+
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');
-  const [status, setStatus] = useState<FormStatus>('idle');
+  const [sending, setSending] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setStatus('submitting');
+    if (!message.trim()) return;
+    setSending(true);
     try {
-      const res = await submitContactForm({ name, email, message });
-      if (res.success) {
-        setStatus('success');
-        setName('');
-        setEmail('');
-        setMessage('');
-      } else {
-        setStatus('error');
-      }
-    } catch {
-      setStatus('error');
+      const res = await submitContactForm({
+        name: name || user?.displayName || 'Coaster Visitor',
+        email: email || user?.email || '',
+        message,
+        uid: user?.uid,
+        context: 'about_view',
+      });
+      if (!res.success) throw new Error(res.error || 'Could not send message.');
+      setMessage('');
+      toast({
+        title: 'Message received',
+        description: 'Thanks for writing to us.',
+      });
+    } catch (err: unknown) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not send note',
+        description: err instanceof Error ? err.message : 'Please try again shortly.',
+      });
+    } finally {
+      setSending(false);
     }
   };
 
   return (
-    <div className="flex flex-col gap-10 p-6 md:p-12 lg:p-16 pb-24 bg-background h-full overflow-y-auto">
+    <div className="space-y-6">
+      {/* Intro */}
+      <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-3xl overflow-hidden">
+        <CardHeader className="pb-4 bg-gradient-to-br from-[#FFFDF9] via-[#FAF6F0] to-[#F5EBDC] border-b border-[#E8DFD1]">
+          <p className="text-[11px] font-bold uppercase tracking-widest text-[#C26D2D]">
+            About Coaster
+          </p>
+          <CardTitle className="text-2xl font-black text-[#1F1B18] tracking-tight">
+            Honest Drink Math. Zero Judgment.
+          </CardTitle>
+          <CardDescription className="text-sm text-[#6E6359] leading-relaxed pt-1">
+            Coaster is your quiet booth-buddy for noticing drinking rhythms over weeks and months
+            — without broken-streak guilt, wagging fingers, or clutter.
+          </CardDescription>
+        </CardHeader>
 
-      {/* Header */}
-      <div className="space-y-6">
-        <div className="flex items-center justify-between px-1">
-          <h2 className="text-[12px] font-bold text-muted-foreground uppercase tracking-[0.2em] italic">About the CFO</h2>
-        </div>
-
-        {/* Hero card */}
-        <Card className="border-none shadow-xl overflow-hidden bg-primary text-white">
-          <CardContent className="p-8 md:p-12 flex flex-col gap-6">
-            <div className="flex items-center gap-5">
-              <div className="p-5 bg-white/10 rounded-2xl shrink-0">
-                <Briefcase className="w-10 h-10 text-white" />
-              </div>
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-60 mb-1">Chief Fitness Officer</p>
-                <h3 className="text-2xl font-black italic tracking-tighter leading-tight">the CFO Audit Suite</h3>
-              </div>
+        <CardContent className="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-4 space-y-2">
+            <div className="flex items-center gap-2 text-[#C26D2D]">
+              <Scale className="w-4 h-4" />
+              <h3 className="text-sm font-bold text-[#1F1B18]">
+                NIAAA Standard Drink Units
+              </h3>
             </div>
-            <div className="space-y-4 text-sm font-medium opacity-80 leading-relaxed">
-              <p>
-                I built this tool because I needed a better way to measure my daily habits against actual, physical changes. It started as a personal experiment: a <span className="font-black text-white">custom, 100-point daily scoring system</span> designed to track visceral fat loss, keep me accountable to my movement, and ensure I hit my protein goals.
-              </p>
-              <p>
-                After accumulating <span className="font-black text-white">3,000 positive points</span> and seeing the physical results line up with the math, I decided to build this out a bit further.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Feature pills */}
-      <div className="space-y-4">
-        <h3 className="text-[12px] font-bold text-muted-foreground uppercase tracking-[0.2em] px-1 italic">What It Tracks</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[
-            { icon: <Dumbbell className="w-5 h-5 text-orange-600" />, bg: 'bg-orange-100', label: 'Daily Scores', desc: 'Activity, protein, and sleep goals combine into a single daily equity score.' },
-            { icon: <MessageSquare className="w-5 h-5 text-purple-600" />, bg: 'bg-purple-100', label: 'Food & Drink Logs', desc: 'Log meals through the AI coach. Macros are pulled from the USDA database, never guessed.' },
-            { icon: <ScanLine className="w-5 h-5 text-emerald-600" />, bg: 'bg-emerald-100', label: 'Body Composition', desc: 'Enter body fat % from a DEXA scan or assessment to sharpen calorie and glycogen estimates.' },
-          ].map(({ icon, bg, label, desc }) => (
-            <Card key={label} className="border-none shadow-md bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-              <CardContent className="p-6">
-                <div className={`p-3 ${bg} rounded-xl w-fit mb-3 shadow-sm`}>{icon}</div>
-                <p className="text-[12px] font-black text-foreground uppercase tracking-[0.1em] mb-1">{label}</p>
-                <p className="text-[11px] font-medium text-muted-foreground leading-relaxed">{desc}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        <Card className="border-none shadow-md bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-          <CardContent className="p-6">
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground mb-2">How to Read Your Score</p>
-            <p className="text-[11px] font-medium text-muted-foreground leading-relaxed">
-              Every day starts at zero and earns points for movement, protein, and sleep, minus
-              anything that works against visceral fat loss. Steps, sleep, and HRV only count toward
-              your score when they come from a connected device — anything you type in yourself is
-              kept, but marked as self-reported.
+            <p className="text-xs text-[#6E6359] leading-relaxed">
+              In Coaster, <strong className="text-[#1F1B18]">1.0u</strong> matches the NIAAA
+              reference standard of <strong className="text-[#1F1B18]">14 grams (0.6 fl oz)</strong>{' '}
+              of pure ethanol (<code className="text-[#1F1B18]">oz × ABV% ÷ 60</code>). That equals
+              one 12 oz 5% beer, a 5 oz 12% wine pour, or 1.5 oz of 80-proof spirits — while a tall
+              16 oz 7% IPA counts cleanly as <strong className="text-[#1F1B18]">1.9u</strong>.
             </p>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
 
-      {/* Monetization / Hardware Recommendations */}
-      <div className="space-y-4">
-        <h3 className="text-[12px] font-bold text-muted-foreground uppercase tracking-[0.2em] px-1 italic">Hardware & Data Accuracy</h3>
-        
-        <Card className="border-none shadow-md bg-white/70 backdrop-blur-sm ring-1 ring-primary/5 hover:ring-primary/20 transition-all">
-          <CardContent className="p-6 md:p-8 space-y-4">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-blue-100 rounded-xl shrink-0">
-                <Activity className="w-6 h-6 text-blue-600" />
-              </div>
-              <div>
-                <h4 className="text-sm font-black uppercase tracking-widest text-foreground">BodySpec DEXA Scans</h4>
-                <p className="text-xs font-medium text-muted-foreground mt-0.5">The gold standard for body composition.</p>
-              </div>
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-4 space-y-2">
+            <div className="flex items-center gap-2 text-[#3F7D58]">
+              <Sparkles className="w-4 h-4" />
+              <h3 className="text-sm font-bold text-[#1F1B18]">
+                Meet Sunny, Your Booth-Buddy
+              </h3>
             </div>
-            <p className="text-sm font-medium text-muted-foreground leading-relaxed">
-              If you want to truly audit your physique, you can&apos;t rely on smart scales. A DEXA scan gives you clinical-grade accuracy on visceral fat, bone density, and muscle mass. We use this data to calibrate the metabolic engine to your exact biology.
+            <p className="text-xs text-[#6E6359] leading-relaxed">
+              Sunny keeps an eye on your 7-day rolling average, weeknight-to-weekend rhythm, and
+              Clear Days without lecturing. When you want to shift gears mid-evening, Sunny offers
+              flavor-matched zero-proof swaps and casual craft trivia.
             </p>
-            <Button asChild variant="outline" className="w-full sm:w-auto font-black uppercase tracking-widest text-xs border-2 mt-2">
-              <a href="https://www.bodyspec.com/" target="_blank" rel="noopener noreferrer">
-                Book a Scan (Affiliate) <ExternalLink className="w-3 h-3 ml-2" />
-              </a>
+          </div>
+
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-4 space-y-2">
+            <div className="flex items-center gap-2 text-[#3F7D58]">
+              <Leaf className="w-4 h-4" />
+              <h3 className="text-sm font-bold text-[#1F1B18]">
+                Clear Days &amp; Zero-Proof Swaps
+              </h3>
+            </div>
+            <p className="text-xs text-[#6E6359] leading-relaxed">
+              Logging a <strong className="text-[#3F7D58]">Clear Day (0.0u)</strong> or an
+              alcohol-free pour earns warm sage credit on your 90-day calendar so empty nights count
+              deliberately — and social nights simply show up in honest amber tones.
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-4 space-y-2">
+            <div className="flex items-center gap-2 text-[#C26D2D]">
+              <Wine className="w-4 h-4" />
+              <h3 className="text-sm font-bold text-[#1F1B18]">
+                Designed for Speed at the Table
+              </h3>
+            </div>
+            <p className="text-xs text-[#6E6359] leading-relaxed">
+              1-tap drink presets, an interactive oz/mL + ABV calculator, and OS Share Sheet support
+              mean a pour is recorded in under three seconds — and moves easily to &ldquo;last
+              night&rdquo; if you remember the morning after.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Hybrid AI Explanation */}
+      <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+        <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+          <CardTitle className="text-base font-bold text-[#1F1B18] flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-[#C26D2D]" />
+            How Coaster&apos;s Hybrid AI Works
+          </CardTitle>
+          <CardDescription className="text-xs text-[#6E6359]">
+            Choose between on-device speed, strict local privacy, or multi-month cloud synthesis.
+          </CardDescription>
+        </CardHeader>
+
+        <CardContent className="pt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-3.5 space-y-1.5">
+            <p className="text-xs font-black text-[#C26D2D]">PREFER_ON_DEVICE</p>
+            <p className="text-xs text-[#6E6359] leading-relaxed">
+              Uses browser-native Gemini Nano first for instant pour parsing and quick notes,
+              falling back smoothly to cloud Gemini when hardware Nano is unavailable.
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#3F7D58]/35 p-3.5 space-y-1.5">
+            <p className="text-xs font-black text-[#3F7D58] flex items-center gap-1">
+              <Lock className="w-3 h-3" />
+              ONLY_ON_DEVICE (Privacy Vault)
+            </p>
+            <p className="text-xs text-[#6E6359] leading-relaxed">
+              Locks all AI requests onto local on-device inference inside Preferences. Nothing leaves
+              your device for AI parsing while Privacy Vault is switched on.
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-3.5 space-y-1.5">
+            <p className="text-xs font-black text-[#1F1B18]">PREFER_IN_CLOUD</p>
+            <p className="text-xs text-[#6E6359] leading-relaxed">
+              Uses server-side Gemini inference for multi-month pattern Q&amp;A, shared drink-card
+              parsing, and optional weekly recap emails.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Feedback & Legal Links */}
+      <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+        <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+          <CardTitle className="text-base font-bold text-[#1F1B18] flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-[#C26D2D]" />
+            Questions or Feedback?
+          </CardTitle>
+          <CardDescription className="text-xs text-[#6E6359]">
+            Coaster is designed for mindful reflection, not medical diagnosis.
+          </CardDescription>
+        </CardHeader>
+
+        <CardContent className="pt-4 space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Your name (optional)"
+                className="h-9 bg-[#FAF6F0] border-[#E8DFD1] text-sm"
+              />
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email address (optional)"
+                className="h-9 bg-[#FAF6F0] border-[#E8DFD1] text-sm"
+              />
+            </div>
+            <Textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Share a note with Sunny's builders..."
+              rows={3}
+              className="bg-[#FAF6F0] border-[#E8DFD1] text-sm"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={sending || !message.trim()}
+              className="rounded-full bg-[#1F1B18] hover:bg-[#352F2A] text-[#FAF6F0] px-4 text-xs font-bold"
+            >
+              {sending ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Send className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              Send Message
             </Button>
-          </CardContent>
-        </Card>
-      </div>
+          </form>
 
-      {/* Substack link */}
-      <div className="space-y-4">
-        <h3 className="text-[12px] font-bold text-muted-foreground uppercase tracking-[0.2em] px-1 italic">Read The Blog</h3>
-        <Card className="border-none shadow-md bg-white/70 backdrop-blur-sm ring-1 ring-primary/5 hover:ring-primary/20 transition-all group">
-          <Link href="https://nickswitzer1.substack.com/" target="_blank" rel="noopener noreferrer">
-            <CardContent className="p-6 flex items-center justify-between">
-              <div>
-                <h4 className="text-sm font-black uppercase tracking-widest text-foreground group-hover:text-primary transition-colors">Nick Switzer&apos;s Substack</h4>
-                <p className="text-xs font-medium text-muted-foreground mt-0.5">Where I write about fitness, protocols, and building this app.</p>
-              </div>
-              <ExternalLink className="w-5 h-5 text-muted-foreground group-hover:text-primary transition-colors" />
-            </CardContent>
-          </Link>
-        </Card>
-      </div>
-
-      {/* Contact form */}
-      <div className="space-y-4">
-        <h3 className="text-[12px] font-bold text-muted-foreground uppercase tracking-[0.2em] px-1 italic">Want to Help Improve It?</h3>
-
-        <Card className="border-none shadow-md bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-          <CardContent className="p-6 md:p-8 space-y-6">
-            <p className="text-sm font-medium text-muted-foreground leading-relaxed">
-              I want to hear from you. Whether you have ideas for new features, ways to improve the scoring system, or you just spotted a bug — your feedback is huge. You can use the form below, or just email me directly at <a href="mailto:nicholas.switzer@gmail.com" className="text-primary hover:underline font-bold">nicholas.switzer@gmail.com</a>.
-            </p>
-
-            {status === 'success' ? (
-              <div className="flex flex-col items-center gap-4 py-8 text-center">
-                <CheckCircle2 className="w-12 h-12 text-emerald-500" />
-                <div>
-                  <p className="font-black uppercase tracking-widest text-foreground">Message Received</p>
-                  <p className="text-[11px] text-muted-foreground mt-1">Thanks — I&apos;ll get back to you soon.</p>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="about-name" className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Name</Label>
-                    <Input
-                      id="about-name"
-                      value={name}
-                      onChange={e => setName(e.target.value)}
-                      placeholder="Your name"
-                      className="rounded-xl border-primary/10 bg-background"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="about-email" className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Email <span className="text-destructive">*</span></Label>
-                    <Input
-                      id="about-email"
-                      type="email"
-                      required
-                      value={email}
-                      onChange={e => setEmail(e.target.value)}
-                      placeholder="your@email.com"
-                      className="rounded-xl border-primary/10 bg-background"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="about-message" className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Message <span className="text-destructive">*</span></Label>
-                  <Textarea
-                    id="about-message"
-                    required
-                    value={message}
-                    onChange={e => setMessage(e.target.value)}
-                    placeholder="Feature ideas, bug reports, scoring suggestions…"
-                    rows={4}
-                    className="rounded-xl border-primary/10 bg-background resize-none"
-                  />
-                </div>
-                {status === 'error' && (
-                  <p className="text-[11px] text-destructive font-bold">Something went wrong — please try again, or email <a href="mailto:nicholas.switzer@gmail.com" className="underline">nicholas.switzer@gmail.com</a>.</p>
-                )}
-                <Button
-                  type="submit"
-                  disabled={status === 'submitting'}
-                  className="w-full h-12 rounded-xl font-black uppercase tracking-widest text-sm"
-                >
-                  {status === 'submitting' ? (
-                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Sending…</>
-                  ) : (
-                    'Drop Me a Message'
-                  )}
-                </Button>
-              </form>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Legal links */}
-      <div className="flex items-center justify-center gap-4 pb-2">
-        <Link href="/privacy" className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/50 hover:text-muted-foreground transition-colors">
-          Privacy Policy
-        </Link>
-        <span className="text-muted-foreground/30 text-[9px]">•</span>
-        <Link href="/terms" className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/50 hover:text-muted-foreground transition-colors">
-          Terms of Service
-        </Link>
-      </div>
-
+          <div className="pt-3 border-t border-[#E8DFD1]/70 flex flex-wrap items-center justify-between gap-2 text-xs text-[#6E6359]">
+            <span>Coaster • Mindful Standard Drink Ledger</span>
+            <div className="flex items-center gap-4 font-semibold">
+              <Link href="/privacy" className="hover:text-[#1F1B18] underline underline-offset-4">
+                Privacy Policy
+              </Link>
+              <Link href="/terms" className="hover:text-[#1F1B18] underline underline-offset-4">
+                Terms of Service
+              </Link>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

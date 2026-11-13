@@ -1,93 +1,80 @@
-import React from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 
-export const metadata = {
-  title: 'Privacy Policy | the CFO (CFO Fitness)',
-  description: 'Privacy policy and account deletion instructions for the CFO (CFO Fitness) application.',
+export const metadata: Metadata = {
+  title: 'Privacy Policy — Coaster',
+  description:
+    'How Coaster handles your drink ledger, Hybrid AI options, and account deletion rights.',
 };
 
 export default function PrivacyPage() {
   return (
-    <div className="max-w-3xl mx-auto px-6 py-12 prose prose-stone">
-      <h1 className="text-3xl font-black uppercase tracking-tighter mb-8">Privacy Policy</h1>
-      
-      <p className="text-muted-foreground mb-8">Effective Date: May 12, 2026 (Updated October 25, 2026)</p>
+    <main className="min-h-screen bg-[#FAF6F0] text-[#1F1B18] py-12 px-4 sm:px-6">
+      <div className="max-w-2xl mx-auto rounded-3xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm p-6 sm:p-10 space-y-6">
+        <div className="space-y-2 border-b border-[#E8DFD1] pb-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-[#C26D2D]">
+            Coaster Legal
+          </p>
+          <h1 className="text-3xl font-black tracking-tight">Privacy Policy</h1>
+          <p className="text-xs text-[#6E6359]">Effective November 2026</p>
+        </div>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">1. Introduction</h2>
-        <p>
-          Welcome to <strong>the CFO (Chief Fitness Officer / CFO Fitness)</strong>. We are committed to protecting your personal information and your right to privacy. This Privacy Policy explains how we collect, use, store, and delete your data when you use our web, iOS, and Android applications.
-        </p>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">1. What Coaster Stores</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            When you create a Coaster account, we store your drink pours, Standard Drink Unit
+            calculations, Clear Days, Zero-Proof swap tastes, timezone, and optional companion
+            email check-in preferences inside your private Firebase Authentication &amp; Cloud
+            Firestore space.
+          </p>
+        </section>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">2. Data We Collect &amp; Device Permissions</h2>
-        <p>
-          To provide fitness portfolio tracking, deterministic Visceral Fat (VF) scoring, and AI coaching, we collect the following information when you choose to provide or connect it:
-        </p>
-        <ul className="list-disc pl-6 space-y-2 mt-4">
-          <li><strong>Account Profile:</strong> Email address, display name, or anonymous/Apple/Google sign-in identifier via Firebase Authentication.</li>
-          <li><strong>Fitness &amp; Nutrition Logs:</strong> Meals, macronutrients (protein, carbohydrates, fats, calories, alcohol), workouts, fasted hours, sleep duration, and body composition metrics.</li>
-          <li><strong>Optional Wearable Sync:</strong> Activity data (steps, calories, distance), sleep patterns, and heart rate variability (HRV) when you explicitly connect Fitbit or Google Health.</li>
-          <li><strong>Camera &amp; Photo Library (Optional):</strong> Meal and workout photos you capture or attach so the AI Coach can estimate macronutrients or log workouts.</li>
-          <li><strong>Microphone (Optional):</strong> Short voice recordings when you tap the microphone button to dictate meals or workouts for transcription. Audio is transcribed immediately and is not permanently stored.</li>
-        </ul>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">2. Hybrid AI &amp; Privacy Vault</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            Coaster supports on-device Gemini Nano (<code className="text-[#1F1B18]">PREFER_ON_DEVICE</code>)
+            so short drink entries and reflections stay right inside your browser whenever supported.
+            Turning on <strong className="text-[#1F1B18]">Privacy Vault (ONLY_ON_DEVICE)</strong> in
+            Preferences blocks AI prompts from leaving your device. Cloud features such as multi-month
+            Ledger Q&amp;A, OS Share parsing, and companion emails use encrypted HTTPS transport to
+            our server endpoints strictly to fulfill your request.
+          </p>
+        </section>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">3. How We Use Your Data</h2>
-        <p>
-          Your data is used exclusively to:
-        </p>
-        <ul className="list-disc pl-6 space-y-2 mt-4">
-          <li>Compute your daily Visceral Fat (VF) score, Alpert Number, and 3-day rolling nutrition ledger.</li>
-          <li>Sync and display your fitness metrics across your dashboard and historical charts.</li>
-          <li>Provide AI-powered nutritional estimates, voice transcription, and coaching recommendations via our &quot;Coach&quot; and &quot;Ledger Analyst&quot; features.</li>
-        </ul>
-        <p className="mt-4 font-semibold">
-          We do not sell your personal or health data to third parties, and we never use your data for third-party advertising.
-        </p>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">3. Shared Pour Links</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            Creating a share card generates a public read-only link for that specific pour list so a
+            friend can view or copy the round onto their own coaster. You can revoke any shared card
+            at any time from Preferences or History.
+          </p>
+        </section>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">4. Data Sharing and Security</h2>
-        <p>
-          We use industry-standard encryption in transit (HTTPS/TLS) and at rest. Your data is stored and processed using Google Cloud / Firebase infrastructure and Google Gemini AI models strictly to provide the application&apos;s core functionality. Payment processing on the web is handled directly by Stripe; we never store raw credit card numbers on our servers.
-        </p>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">4. No Ad Tracking or Data Resale</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            Coaster never sells, rents, or shares your drink ledger with advertisers, data brokers, or
+            third-party analytics networks.
+          </p>
+        </section>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">5. Google API Disclosure</h2>
-        <p>
-          the CFO&apos;s use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Google API Services User Data Policy</a>, including the Limited Use requirements.
-        </p>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">5. Export &amp; Permanent Deletion</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            You can export your complete ledger in CSV or JSON at any time, or permanently erase your
+            account and all subcollections directly inside Preferences.
+          </p>
+        </section>
 
-      <section id="account-deletion" className="mb-10 p-6 rounded-2xl border bg-muted/20">
-        <h2 className="text-xl font-bold mb-4">6. Account &amp; Data Deletion</h2>
-        <p>
-          You can permanently delete your CFO Fitness account and all associated personal, nutrition, workout, and coaching data at any time:
-        </p>
-        <ul className="list-disc pl-6 space-y-2 mt-4">
-          <li>
-            <strong>In-App Instant Deletion (iOS, Android &amp; Web):</strong> Open the app, navigate to the <strong>Settings (Portfolio Management)</strong> tab, scroll to the <strong>Account &amp; Data Deletion</strong> section at the bottom, and tap <strong>Delete Account</strong>. Your Firebase Authentication record and all Firestore documents (<code>/users/&#123;uid&#125;</code>, daily logs, chat history, and preferences) are permanently and immediately erased.
-          </li>
-          <li>
-            <strong>Deletion via Web / Email Request:</strong> If you no longer have the app installed, email <a href="mailto:nicholas.switzer@gmail.com?subject=Delete%20My%20CFO%20Fitness%20Account" className="text-blue-600 hover:underline">nicholas.switzer@gmail.com</a> from the email address associated with your account (or provide your Portfolio UID) with the subject line <em>&quot;Delete My CFO Fitness Account&quot;</em>. Complete deletion is processed within 48 hours.
-          </li>
-        </ul>
-      </section>
-
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">7. Contact Us</h2>
-        <p>
-          If you have any questions about this policy or your data, please contact the developer at <a href="mailto:nicholas.switzer@gmail.com" className="text-blue-600 hover:underline">nicholas.switzer@gmail.com</a>.
-        </p>
-      </section>
-
-      <footer className="mt-12 pt-8 border-t text-sm text-muted-foreground">
-        <Link href="/" className="hover:text-foreground">← Back to Dashboard</Link>
-      </footer>
-    </div>
+        <div className="pt-4 border-t border-[#E8DFD1] flex items-center justify-between text-xs font-semibold text-[#6E6359]">
+          <Link href="/" className="hover:text-[#1F1B18] underline underline-offset-4">
+            Back to Coaster
+          </Link>
+          <Link href="/terms" className="hover:text-[#1F1B18] underline underline-offset-4">
+            Terms of Service
+          </Link>
+        </div>
+      </div>
+    </main>
   );
 }

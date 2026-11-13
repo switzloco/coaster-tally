@@ -1,2304 +1,969 @@
 'use client';
 
-import React from 'react';
-import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import React, { useMemo, useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { HealthData, HistoryEntry, healthService } from '@/lib/health-service';
+import { FoodLogEntry, formatHHMM12h } from '@/lib/food-exercise-types';
 import {
-  Target,
-  Zap,
-  Briefcase,
-  Loader2,
-  ShieldAlert,
-  ShieldCheck,
-  Scale,
-  RefreshCw,
-  Unplug,
-  CalendarIcon,
-  RotateCcw,
-  AlertTriangle,
-  Activity,
-  TrendingUp,
-  Clock,
-  Utensils,
-  Flame,
-  Trophy,
+  calculateStandardUnits,
+  mlToOz,
+  formatUnits,
+  DRINK_PRESETS,
+  computeTrendSummary,
+  getEntryUnits,
+  isClearDayEntry,
+  isZeroProofEntry,
+} from '@/lib/drink-units';
+import { useUser, useFirestore, useCollection, useDoc, useMemoFirebase } from '@/firebase';
+import { collection, doc, query, where } from 'firebase/firestore';
+import { useToast } from '@/hooks/use-toast';
+import { useHybridAi } from '@/components/hybrid-ai-provider';
+import { HybridTickerTerminal } from '@/components/hybrid-ticker-terminal';
+import { OutreachInlinePrompt } from '@/components/outreach-inline-prompt';
+import { ShareMealButton } from '@/components/share-meal-button';
+import { VfDayDetail } from '@/components/vf-day-detail';
+import {
+  Beer,
+  Calendar,
+  ChevronLeft,
+  ChevronRight,
+  CupSoda,
+  Leaf,
+  Martini,
   Plus,
-  ChevronDown,
-  ChevronUp,
-  Settings2,
-  History,
-  CheckCircle2,
+  RefreshCw,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
-  Search,
-  X,
-} from "lucide-react";
-import { HealthData, UserPreferences, FitbitCredentials, OuraCredentials, FoodNickname, HistoryEntry, healthService } from '@/lib/health-service';
-import { fitbitService } from '@/lib/fitbit-service';
-import { syncFitbitData, syncFitbitSnapshot, disconnectFitbit, rescoreRecentDays } from '@/app/actions/fitbit';
-import type { SyncResult } from '@/lib/fitbit-sync';
-import { syncOuraData, disconnectOura, getOuraAuthUrl } from '@/app/actions/oura';
-import type { OuraSyncResult } from '@/lib/oura-sync';
-import { syncWithingsData, disconnectWithings, getWithingsAuthUrl } from '@/app/actions/withings';
-import { useUser, useFirestore, useDoc, useMemoFirebase, useCollection } from '@/firebase';
-import { DashboardCharts, computeMaxGlycogenKcal, LIVER_MAX_KCAL } from './dashboard-charts';
-import { OutreachInlinePrompt } from './outreach-inline-prompt';
-import { HybridTickerTerminal } from './hybrid-ticker-terminal';
-import { useHybridAi } from './hybrid-ai-provider';
-import { computeAlpertNumber, calculateDailyVFScore, computeFastingHoursFromFoodLogs } from '@/lib/vf-scoring';
-import { computeAlpertPace, computeEatRunway } from '@/lib/alpert-pace';
-import {
-  computeLevelProgress,
-  DEFAULT_ACTIVE_LEVEL,
-  DEFAULT_LEVEL_HISTORY,
-  getEffectiveDayNote,
-  resolveActiveLevel,
-  type LevelConfig,
-} from '@/lib/level-tracker';
-import { CURRENT_SCORING_RELEASE, inferScoringRelease } from '@/lib/scoring-releases';
-import { runMetabolicSimulation, computeMuscleGlycogenMaxKcal, estimateBmrKcal, creditedCaloriesOut, ACTIVITY_CREDIT_FRACTION } from '@/lib/metabolic-engine';
-import { useToast } from '@/hooks/use-toast';
-import { doc, collection, query, where, limit, orderBy, Timestamp } from 'firebase/firestore';
-import { Calendar } from '@/components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import {
-  parseSupplementFieldsFromText,
-  formatSupplementBadges,
-  type FoodLogEntry,
-  type ExerciseLogEntry,
-} from '@/lib/food-exercise-types';
+  TrendingDown,
+  TrendingUp,
+  Wine,
+} from 'lucide-react';
 
-function formatTimeAgo(ms: number): string {
-  const diff = Date.now() - ms;
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+type DrinkPreset = (typeof DRINK_PRESETS)[number];
+
+interface CoasterFoodLogEntry extends FoodLogEntry {
+  id: string;
+  standardUnits?: number;
+  isClearDay?: boolean;
+  isZeroProof?: boolean;
+  drinkCategory?: string;
+  volumeOz?: number;
+  abvPct?: number;
+  alternativeSuggested?: string;
 }
 
-interface DashboardCardsProps {
+export interface DashboardPourInput {
+  name: string;
+  volumeOz: number;
+  abvPct: number;
+  units: number;
+  category: string;
+  zeroProof?: boolean;
+  clearDay?: boolean;
+  date: string;
+  consumedAt: string;
+}
+
+export interface DashboardCardsProps {
   data: HealthData | null;
   isLoading?: boolean;
+  onLogPour?: (pour: DashboardPourInput) => Promise<void> | void;
 }
 
-const OuraLogo = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 24 24" className={className} fill="currentColor">
-    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
-    <path d="M12 6c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm0 10c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z"/>
-  </svg>
-);
+const SUNNY_SWAP_CORNER = [
+  {
+    title: 'Bitters + Crisp Soda Tall',
+    pairing: 'Swapping round two after an IPA or Manhattan',
+    note: 'A few dashes of aromatic bitters in chilled soda with an expressed orange peel keeps the ritual, aroma, and slow sip pace at practically 0.0u.',
+    trivia: 'Booth trivia: One standard 1.0u unit equals 14g (0.6 fl oz) of pure alcohol — whether it is 12 oz at 5% lager, 5 oz at 12% wine, or 1.5 oz of 80-proof spirits.',
+  },
+  {
+    title: 'Hop-Infused Sparkling Water',
+    pairing: 'Easy weeknight cooler when you want pine & citrus aroma',
+    note: 'Dry-hopped sparkling cans nail the Citra & Amarillo snap of an IPA with zero alcohol and crisp carbonation.',
+    trivia: 'Booth trivia: Moving from a 16 oz 7% craft IPA (1.9u) to a 12 oz 4.5% session pilsner (0.9u) cuts more than half the units in the same glass.',
+  },
+  {
+    title: 'NA Amaro & Tonic on Ice',
+    pairing: 'Before-dinner spritz or late-evening nightcap',
+    note: 'Gentian root and grapefruit peel give a proper grown-up bitterness so your hands stay busy without pushing tomorrow’s rolling average.',
+    trivia: 'Booth trivia: A 6 oz restaurant wine pour at 14.5% ABV carries 1.5 standard units — 50% more than the textbook 5 oz, 12% reference glass.',
+  },
+  {
+    title: 'Ginger Lime Highball',
+    pairing: 'Post-work unwind or weekend porch drink',
+    note: 'Fiery pressed ginger, half a lime, and crushed ice gives that clean throat hit most mocktails miss.',
+    trivia: 'Booth trivia: Logging two Clear Days mid-week brings a steady 7-day average down faster than counting drops on Saturday.',
+  },
+];
 
-const FitbitLogo = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 24 24" className={className} fill="currentColor">
-    <circle cx="12" cy="12" r="2" />
-    <circle cx="17" cy="12" r="2" />
-    <circle cx="22" cy="12" r="2" />
-    <circle cx="12" cy="7"  r="2" />
-    <circle cx="12" cy="17" r="2" />
-    <circle cx="7"  cy="12" r="2" />
-    <circle cx="17" cy="7"  r="2" />
-    <circle cx="17" cy="17" r="2" />
-    <circle cx="12" cy="2"  r="2" />
-    <circle cx="12" cy="22" r="2" />
-    <circle cx="2"  cy="12" r="2" />
-  </svg>
-);
+function getLocalDateKeyOffset(daysAgo = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
-const WithingsLogo = ({ className }: { className?: string }) => (
-  <svg viewBox="0 0 24 24" className={className} fill="currentColor">
-    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
-    <path d="M16.5 8l-1.5 8h-2l-1-5-1 5h-2l-1.5-8h2l.5 5 1-5h2l1 5 .5-5h2z"/>
-  </svg>
-);
+function shiftDateKey(dateKey: string, deltaDays: number): string {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + deltaDays);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
 
-export function DashboardCards({ data, isLoading }: DashboardCardsProps) {
+function formatDateHeading(dateKey: string, todayKey: string): string {
+  if (dateKey === todayKey) return "Today's Coaster";
+  if (dateKey === shiftDateKey(todayKey, -1)) return "Yesterday's Coaster";
+  const [y, m, d] = dateKey.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function resolveCurrentHHMM(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+function renderPresetIcon(preset: DrinkPreset) {
+  if (preset.clearDay) return <Leaf className="w-3.5 h-3.5 text-[#3F7D58]" />;
+  if (preset.zeroProof) return <Sparkles className="w-3.5 h-3.5 text-[#3F7D58]" />;
+  if (preset.category === 'wine') return <Wine className="w-3.5 h-3.5 text-[#C26D2D]" />;
+  if (preset.category === 'beer') return <Beer className="w-3.5 h-3.5 text-[#C26D2D]" />;
+  if (preset.category === 'seltzer') return <CupSoda className="w-3.5 h-3.5 text-[#C26D2D]" />;
+  return <Martini className="w-3.5 h-3.5 text-[#C26D2D]" />;
+}
+
+export function DashboardCards({ data, isLoading, onLogPour }: DashboardCardsProps) {
   const { user } = useUser();
   const db = useFirestore();
   const { toast } = useToast();
   const { setEarningsModalOpen } = useHybridAi();
 
-  const prefsRef = useMemoFirebase(
-    () => user ? doc(db, 'users', user.uid, 'preferences', 'settings') : null,
-    [db, user]
-  );
-  const { data: prefs } = useDoc<UserPreferences>(prefsRef);
+  const todayKey = useMemo(() => getLocalDateKeyOffset(0), []);
+  const [selectedDateStr, setSelectedDateStr] = useState<string>(() => getLocalDateKeyOffset(0));
 
-  const fitbitTokensRef = useMemoFirebase(
-    () => user ? doc(db, 'users', user.uid, 'preferences', 'fitbit_tokens') : null,
-    [db, user]
-  );
-  const { data: fitbitCreds } = useDoc<FitbitCredentials>(fitbitTokensRef);
+  // Quick Unit Calculator state
+  const [volumeUnit, setVolumeUnit] = useState<'oz' | 'ml'>('oz');
+  const [volumeInput, setVolumeInput] = useState<string>('12');
+  const [abvInput, setAbvInput] = useState<string>('5');
+  const [customName, setCustomName] = useState<string>('');
+  const [calcExpanded, setCalcExpanded] = useState<boolean>(true);
+  const [isLogging, setIsLogging] = useState<boolean>(false);
 
-  const ouraTokensRef = useMemoFirebase(
-    () => user ? doc(db, 'users', user.uid, 'preferences', 'oura_tokens') : null,
-    [db, user]
-  );
-  const { data: ouraCreds } = useDoc<OuraCredentials>(ouraTokensRef);
+  // Sunny booth note cycler + Day detail sheet
+  const [sunnyIndex, setSunnyIndex] = useState<number>(() => new Date().getDate() % SUNNY_SWAP_CORNER.length);
+  const [daySheetOpen, setDaySheetOpen] = useState<boolean>(false);
 
-  const withingsTokensRef = useMemoFirebase(
-    () => user ? doc(db, 'users', user.uid, 'preferences', 'withings_tokens') : null,
-    [db, user]
-  );
-  const { data: withingsCreds } = useDoc<any>(withingsTokensRef);
+  const cutoff90 = useMemo(() => getLocalDateKeyOffset(95), []);
 
-  const todayStr = React.useMemo(() => {
-    const now = new Date();
-    return now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, '0') + "-" + String(now.getDate()).padStart(2, '0');
-  }, []);
+  const userProfileRef = useMemoFirebase(() => {
+    if (!user || !db) return null;
+    return doc(db, 'users', user.uid);
+  }, [user, db]);
 
-  const [selectedDateStr, setSelectedDateStr] = React.useState<string>(todayStr);
-  const [calendarOpen, setCalendarOpen] = React.useState(false);
-  const [chartsExpanded, setChartsExpanded] = React.useState(false);
+  const { data: userProfileDoc } = useDoc<{ preferredZeroProofFlavors?: string[] }>(userProfileRef);
 
-  // Level editor & archive state
-  const [levelEditorOpen, setLevelEditorOpen] = React.useState(false);
-  const [pastLevelsOpen, setPastLevelsOpen] = React.useState(false);
-  const [editLevelName, setEditLevelName] = React.useState('');
-  const [editLevelStart, setEditLevelStart] = React.useState('');
-  const [editLevelTarget, setEditLevelTarget] = React.useState('1000');
-  const [editLevelDeadline, setEditLevelDeadline] = React.useState('');
-  const [editLevelOffset, setEditLevelOffset] = React.useState('0');
-  const [editLevelNotes, setEditLevelNotes] = React.useState('');
+  const preferredFlavors =
+    userProfileDoc?.preferredZeroProofFlavors ??
+    (data as (HealthData & { preferredZeroProofFlavors?: string[] }) | null)
+      ?.preferredZeroProofFlavors ??
+    [];
 
-  // Zero-AI Quick Log state
-  const [quickFoodOpen, setQuickFoodOpen] = React.useState(false);
-  const [quickItemName, setQuickItemName] = React.useState('');
-  const [quickCalories, setQuickCalories] = React.useState('');
-  const [quickProtein, setQuickProtein] = React.useState('');
-  const [quickCarbs, setQuickCarbs] = React.useState('');
-  const [quickFat, setQuickFat] = React.useState('');
-  const [quickMeal, setQuickMeal] = React.useState<'breakfast' | 'lunch' | 'dinner' | 'snack'>('lunch');
-  const [isLoggingQuick, setIsLoggingQuick] = React.useState(false);
-  const [showAllNicknames, setShowAllNicknames] = React.useState(false);
-  const [nicknameQuery, setNicknameQuery] = React.useState('');
-  const [previewNickKey, setPreviewNickKey] = React.useState<string | null>(null);
-  const [removingFoodId, setRemovingFoodId] = React.useState<string | null>(null);
-
-  // Zero-AI Score Lock state
-  const [scoreLockOpen, setScoreLockOpen] = React.useState(false);
-  const [lockFastingHours, setLockFastingHours] = React.useState('0');
-  const [lockAlcoholDrinks, setLockAlcoholDrinks] = React.useState('0');
-  const [lockDayNote, setLockDayNote] = React.useState('');
-  const [isLockingScore, setIsLockingScore] = React.useState(false);
-
-  const isViewingToday = selectedDateStr === todayStr;
-
-  const prevDateStr = React.useMemo(() => {
-    const [y, m, d] = selectedDateStr.split('-').map(Number);
-    const prev = new Date(y, m - 1, d - 1);
-    return prev.getFullYear() + '-'
-      + String(prev.getMonth() + 1).padStart(2, '0') + '-'
-      + String(prev.getDate()).padStart(2, '0');
-  }, [selectedDateStr]);
-
-  const selectedDateObj = React.useMemo(() => {
-    const [y, m, d] = selectedDateStr.split('-').map(Number);
-    return new Date(y, m - 1, d);
-  }, [selectedDateStr]);
-
-  const handleDateSelect = (date: Date | undefined) => {
-    if (!date) return;
-    const str = date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, '0') + "-" + String(date.getDate()).padStart(2, '0');
-    setSelectedDateStr(str);
-    setCalendarOpen(false);
-  };
-
-  // History entry for the selected date (including today if already scored)
-  const selectedHistoryEntry = React.useMemo(() => {
-    if (!data?.history) return null;
-    return data.history.find(h => (h.isoDate || h.date) === selectedDateStr) ?? null;
-  }, [data?.history, selectedDateStr]);
-
-  const historyEntry = !isViewingToday ? selectedHistoryEntry : null;
-
-  const foodLogQuery = useMemoFirebase(
-    () => user ? query(
+  const logs90Query = useMemoFirebase(() => {
+    if (!user || !db) return null;
+    return query(
       collection(db, 'users', user.uid, 'food_log'),
-      where('date', '==', selectedDateStr),
-      limit(50)
-    ) : null,
-    [db, user, selectedDateStr]
-  );
-  const { data: todayFoodLogs } = useCollection<FoodLogEntry>(foodLogQuery);
-
-  // Recent 60 food logs across all days so we can sort saved Tickers by recency
-  const recentFoodLogQuery = useMemoFirebase(
-    () => user ? query(
-      collection(db, 'users', user.uid, 'food_log'),
-      orderBy('timestamp', 'desc'),
-      limit(60)
-    ) : null,
-    [db, user]
-  );
-  const { data: recentFoodLogs } = useCollection<FoodLogEntry>(recentFoodLogQuery);
-
-  const exerciseLogQuery = useMemoFirebase(
-    () => user ? query(
-      collection(db, 'users', user.uid, 'exercise_log'),
-      where('date', '==', selectedDateStr),
-      limit(20)
-    ) : null,
-    [db, user, selectedDateStr]
-  );
-  const { data: todayExerciseLogs } = useCollection<ExerciseLogEntry>(exerciseLogQuery);
-
-  const prevFoodLogQuery = useMemoFirebase(
-    () => user ? query(
-      collection(db, 'users', user.uid, 'food_log'),
-      where('date', '==', prevDateStr),
-      limit(50)
-    ) : null,
-    [db, user, prevDateStr]
-  );
-  const { data: prevFoodLogs } = useCollection<FoodLogEntry>(prevFoodLogQuery);
-
-  const prevExerciseLogQuery = useMemoFirebase(
-    () => user ? query(
-      collection(db, 'users', user.uid, 'exercise_log'),
-      where('date', '==', prevDateStr),
-      limit(20)
-    ) : null,
-    [db, user, prevDateStr]
-  );
-  const { data: prevExerciseLogs } = useCollection<ExerciseLogEntry>(prevExerciseLogQuery);
-
-  const inferredFastingHours = React.useMemo(
-    () => computeFastingHoursFromFoodLogs(todayFoodLogs ?? undefined, prevFoodLogs ?? undefined),
-    [todayFoodLogs, prevFoodLogs],
-  );
-
-  React.useEffect(() => {
-    const note = getEffectiveDayNote(selectedHistoryEntry ?? { isoDate: selectedDateStr }) ?? '';
-    setLockDayNote(note);
-    if (selectedHistoryEntry?.breakdown) {
-      const storedFasting = selectedHistoryEntry.breakdown.fastingHours ?? 0;
-      setLockFastingHours(String(storedFasting > 0 ? storedFasting : inferredFastingHours));
-      setLockAlcoholDrinks(String(selectedHistoryEntry.breakdown.alcoholDrinks ?? 0));
-    } else {
-      setLockFastingHours(String(inferredFastingHours));
-      setLockAlcoholDrinks('0');
-    }
-  }, [selectedDateStr, selectedHistoryEntry, inferredFastingHours]);
-
-  // Auto-heal historical entries whose fastingHours was recorded as 0 before meal-timestamp inference
-  const healedFastingDatesRef = React.useRef<Set<string>>(new Set());
-  React.useEffect(() => {
-    if (!user || !data?.history || !selectedHistoryEntry?.breakdown) return;
-    if ((selectedHistoryEntry.breakdown.fastingHours ?? 0) > 0) return;
-    if (inferredFastingHours <= 0) return;
-    if (healedFastingDatesRef.current.has(selectedDateStr)) return;
-    healedFastingDatesRef.current.add(selectedDateStr);
-
-    const updatedHistory = data.history.map((h) => {
-      if ((h.isoDate || h.date) !== selectedDateStr || !h.breakdown) return h;
-      return {
-        ...h,
-        breakdown: {
-          ...h.breakdown,
-          fastingHours: inferredFastingHours,
-          fastingActive: inferredFastingHours >= 16,
-        },
-      };
-    });
-    healthService.updateHealthData(db, user.uid, { history: updatedHistory }).catch(() => {});
-  }, [user, db, data?.history, selectedHistoryEntry, selectedDateStr, inferredFastingHours]);
-
-  const morningGlycogenPct = React.useMemo(() => {
-    const totalMax  = computeMaxGlycogenKcal(data?.weightKg, data?.bodyFatPct);
-    const muscleMax = Math.max(400, totalMax - LIVER_MAX_KCAL);
-
-    const MUSCLE_FRACTION: Record<string, number> = {
-      tier1_walking:    0.40,
-      tier2_steady_state: 0.65,
-      tier3_anaerobic:  0.85,
-    };
-
-    if (prevFoodLogs !== undefined && prevExerciseLogs !== undefined) {
-      const activePrevFood = (prevFoodLogs ?? []).filter(e => !e.ignored);
-      const activePrevEx   = (prevExerciseLogs ?? []).filter(e => !e.ignored);
-
-      const prevCarbKcal = activePrevFood.reduce((s, e) => s + ((e.carbsG || 0) * 4), 0);
-      const muscleCarbs  = Math.max(0, prevCarbKcal - 120);
-
-      const activeBurn = activePrevEx.reduce((s, e) => {
-        const frac = e.activityTier ? (MUSCLE_FRACTION[e.activityTier] ?? 0.65) : 0.65;
-        return s + ((e.adjustedCalories || 0) * frac);
-      }, 0);
-
-      const prevMuscleKcal = muscleMax;
-      const endMuscleKcal  = Math.max(0, Math.min(muscleMax, prevMuscleKcal - activeBurn + muscleCarbs));
-      return Math.round((endMuscleKcal / muscleMax) * 100);
-    }
-
-    const history = data?.history;
-    if (!history || history.length === 0) return 100;
-    const prevEntry = history.find(h => (h.isoDate || h.date) === prevDateStr);
-    if (!prevEntry?.breakdown) return 100;
-
-    const { caloriesIn, caloriesOut } = prevEntry.breakdown;
-    const activeBurnFallback = Math.max(0, caloriesOut - 1800) * 0.65;
-    const totalCarbKcal  = caloriesIn * 0.35;
-    const muscleCarbs    = Math.max(0, totalCarbKcal - 120);
-    const endMuscleKcal  = Math.max(0, Math.min(muscleMax, muscleMax - activeBurnFallback + muscleCarbs));
-    return Math.round((endMuscleKcal / muscleMax) * 100);
-  }, [prevFoodLogs, prevExerciseLogs, data?.history, data?.weightKg, data?.bodyFatPct, prevDateStr]);
-
-  const computedTotals = React.useMemo(() => {
-    if (!todayFoodLogs) return null;
-    const active = todayFoodLogs.filter(e => !e.ignored);
-    return {
-      proteinG: active.reduce((s, e) => s + (e.proteinG || 0), 0),
-      caloriesIn: active.reduce((s, e) => s + (e.calories || 0), 0),
-      carbsG: active.reduce((s, e) => s + (e.carbsG || 0), 0),
-    };
-  }, [todayFoodLogs]);
-
-  const [isSyncing, setIsSyncing] = React.useState(false);
-  const [isOuraSyncing, setIsOuraSyncing] = React.useState(false);
-  const [isWithingsSyncing, setIsWithingsSyncing] = React.useState(false);
-  const hasAutoSyncedTodayRef = React.useRef<string | null>(null);
-
-  const todayFitbitSnapshot = data?.fitbitByDate?.[todayStr] ?? null;
-  const fitbitForDate = !isViewingToday ? (data?.fitbitByDate?.[selectedDateStr] ?? null) : todayFitbitSnapshot;
-  const isLegacyFitbit = fitbitCreds?.provider === 'fitbit';
-
-  const bmrKcal = estimateBmrKcal(data?.weightKg, data?.heightCm, prefs?.profile?.age);
-
-  const dailyProteinG = computedTotals?.proteinG ?? (isViewingToday ? (data?.dailyProteinG || 0) : (historyEntry?.breakdown?.proteinG || 0));
-  const dailyCaloriesIn = computedTotals?.caloriesIn ?? (isViewingToday ? (data?.dailyCaloriesIn || 0) : (historyEntry?.breakdown?.caloriesIn || 0));
-  const dailyCarbsG = computedTotals?.carbsG ?? (data?.dailyCarbsG || 0);
-
-  // Prevent yesterday's dailyCaloriesOut from leaking into a new morning before the first sync
-  const dailyCaloriesOut = React.useMemo(() => {
-    if (!isViewingToday) {
-      return historyEntry?.breakdown?.caloriesOut || fitbitForDate?.caloriesOut || data?.dailyCaloriesOut || 2000;
-    }
-    if (todayFitbitSnapshot?.caloriesOut && todayFitbitSnapshot.caloriesOut > 0) {
-      return todayFitbitSnapshot.caloriesOut;
-    }
-    if (!data?.fitbitByDate && data?.lastActiveDate === todayStr && data?.dailyCaloriesOut) {
-      return data.dailyCaloriesOut;
-    }
-    if (data?.isDeviceVerified && data?.lastActiveDate === todayStr && data?.dailyCaloriesOut && !data?.fitbitByDate?.[prevDateStr]) {
-      return data.dailyCaloriesOut;
-    }
-    if (!data?.isDeviceVerified && data?.dailyCaloriesOut) {
-      return data.dailyCaloriesOut;
-    }
-    // New calendar day before watch has published today's caloriesOut: estimate from elapsed BMR + logged exercise
-    const now = new Date();
-    const hoursElapsedNow = Math.max(0.5, now.getHours() + now.getMinutes() / 60);
-    const activeExKcal = (todayExerciseLogs ?? [])
-      .filter((e) => !e.ignored)
-      .reduce((s, e) => s + (e.adjustedCalories || 0), 0);
-    return Math.max(60, Math.round((bmrKcal / 24) * hoursElapsedNow) + activeExKcal);
-  }, [isViewingToday, historyEntry, fitbitForDate, todayFitbitSnapshot, data, todayStr, prevDateStr, todayExerciseLogs, bmrKcal]);
-
-  const fitbitActivities = isViewingToday
-    ? todayFitbitSnapshot?.activities
-    : fitbitForDate?.activities;
-
-  const visceralFatPoints = data?.visceralFatPoints || 0;
-  const proteinGoal = prefs?.targets?.proteinGoal ?? 150;
-  const plantGoalG = prefs?.targets?.plantGoalG ?? 800;
-  const dailyPlantG = data?.dailyPlantG ?? 0;
-  const plantProgress = Math.min(100, (dailyPlantG / plantGoalG) * 100);
-
-  const showAdvancedMetabolic = prefs?.display?.showAdvancedMetabolic ?? true;
-  const showProtein = prefs?.display?.showProtein ?? true;
-  const showPlantMatter = prefs?.display?.showPlantMatter ?? false;
-  const showRecovery = prefs?.display?.showRecovery ?? true;
-  const showVfScore = prefs?.display?.showVfScore ?? true;
-
-  const alpertNumber = computeAlpertNumber(data?.weightKg || 0, data?.bodyFatPct || 0);
-  const scoredCaloriesOut = historyEntry?.breakdown?.scoredCaloriesOut
-    ?? creditedCaloriesOut(dailyCaloriesOut, bmrKcal);
-  const alpertDeficit = scoredCaloriesOut - dailyCaloriesIn;
-
-  // Compute yesterday's end-of-day net deficit so waking up fasted at 8:00 AM continues last night's breach clock seamlessly
-  const prevDayDeficitKcal = React.useMemo(() => {
-    if (!isViewingToday || !data) return 0;
-    try {
-      const cached = typeof window !== 'undefined' ? window.localStorage.getItem(`vf_midnight_deficit_${prevDateStr}`) : null;
-      if (cached !== null && !Number.isNaN(Number(cached))) {
-        return Math.max(0, Number(cached));
-      }
-    } catch {
-      // ignore storage errors
-    }
-    const prevEntry = data.history?.find((h) => (h.isoDate || h.date) === prevDateStr);
-    const prevSnap = data.fitbitByDate?.[prevDateStr];
-    const activePrevFood = (prevFoodLogs ?? []).filter((e) => !e.ignored);
-    const prevCalIn =
-      activePrevFood.length > 0
-        ? activePrevFood.reduce((s, e) => s + (e.calories || 0), 0)
-        : (prevEntry?.breakdown?.caloriesIn ?? 0);
-    if (prevCalIn <= 0 && !prevEntry && !prevSnap) return 0;
-
-    const prevRawOut =
-      prevSnap?.caloriesOut ||
-      prevEntry?.breakdown?.caloriesOut ||
-      (data.lastActiveDate === prevDateStr ? data.dailyCaloriesOut : 0) ||
-      bmrKcal;
-    let prevScoredOut =
-      prevEntry?.breakdown?.scoredCaloriesOut ?? creditedCaloriesOut(prevRawOut, bmrKcal);
-
-    // If yesterday's snapshot was captured mid-evening before midnight, top up ~3h of evening BMR
-    if (prevSnap?.capturedOnDate === prevDateStr && !prevEntry?.breakdown?.scoredCaloriesOut) {
-      prevScoredOut += Math.round((bmrKcal / 24) * 3.2);
-    }
-    return Math.max(0, prevScoredOut - prevCalIn);
-  }, [isViewingToday, data, prevDateStr, prevFoodLogs, bmrKcal]);
-
-  const dailyAlpertScore = React.useMemo(() => {
-    if (!data) return null;
-    if (!isViewingToday && historyEntry) return historyEntry.gain;
-    if (isViewingToday && selectedHistoryEntry && dailyCaloriesIn <= 0) return selectedHistoryEntry.gain;
-    if (dailyCaloriesOut <= 0) return null;
-    if (isViewingToday && dailyCaloriesIn <= 0) return null;
-    const result = calculateDailyVFScore({
-      caloriesIn: dailyCaloriesIn,
-      caloriesOut: dailyCaloriesOut,
-      proteinG: dailyProteinG,
-      proteinGoal,
-      fastingHours: Number(lockFastingHours) || 0,
-      alcoholDrinks: Number(lockAlcoholDrinks) || 0,
-      sleepHours: data.sleepHours ?? 7,
-      seedOilMeals: 0,
-      weightKg: data.weightKg,
-      bodyFatPct: data.bodyFatPct,
-      heightCm: data.heightCm,
-      age: prefs?.profile?.age,
-      foodLogs: todayFoodLogs ?? undefined,
-      prevFoodLogs: prevFoodLogs ?? undefined,
-      exerciseLogs: todayExerciseLogs ?? undefined,
-      fitbitActivities,
-    });
-    return result.score;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, isViewingToday, historyEntry, selectedHistoryEntry, dailyCaloriesOut, dailyCaloriesIn, dailyProteinG,
-      proteinGoal, alpertNumber, todayFoodLogs, prevFoodLogs, todayExerciseLogs, fitbitActivities, prefs?.profile?.age, lockFastingHours, lockAlcoholDrinks]);
-
-  // Build 3-day recent history summary for Zero-AI 3-Day Nutritionist
-  const recentDaysSummary = React.useMemo(() => {
-    if (!data) return [];
-    const results: Array<{
-      date: string;
-      caloriesIn: number;
-      scoredCaloriesOut: number;
-      proteinG: number;
-      carbsG?: number;
-      score?: number;
-    }> = [];
-    const baseDate = new Date(`${selectedDateStr}T12:00:00`);
-    for (let offset = 1; offset <= 3; offset++) {
-      const d = new Date(baseDate.getTime() - offset * 86_400_000);
-      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const hEntry = data.history?.find((h) => (h.isoDate || h.date) === iso);
-      const snap = data.fitbitByDate?.[iso];
-      const calIn =
-        offset === 1 && isViewingToday && (prevFoodLogs ?? []).some((e) => !e.ignored)
-          ? (prevFoodLogs ?? []).filter((e) => !e.ignored).reduce((s, e) => s + (e.calories || 0), 0)
-          : (hEntry?.breakdown?.caloriesIn ?? 0);
-      const protG =
-        offset === 1 && isViewingToday && (prevFoodLogs ?? []).some((e) => !e.ignored)
-          ? (prevFoodLogs ?? []).filter((e) => !e.ignored).reduce((s, e) => s + (e.proteinG || 0), 0)
-          : (hEntry?.breakdown?.proteinG ?? 0);
-      const carbsG =
-        offset === 1 && isViewingToday && (prevFoodLogs ?? []).some((e) => !e.ignored)
-          ? (prevFoodLogs ?? []).filter((e) => !e.ignored).reduce((s, e) => s + (e.carbsG || 0), 0)
-          : undefined;
-      const rawOut = snap?.caloriesOut || hEntry?.breakdown?.caloriesOut || bmrKcal;
-      const scoredOut = hEntry?.breakdown?.scoredCaloriesOut ?? creditedCaloriesOut(rawOut, bmrKcal);
-      if (calIn > 0 || hEntry) {
-        results.push({
-          date: iso,
-          caloriesIn: calIn,
-          scoredCaloriesOut: scoredOut,
-          proteinG: protG,
-          carbsG,
-          score: hEntry?.gain,
-        });
-      }
-    }
-    return results;
-  }, [data, selectedDateStr, isViewingToday, prevFoodLogs, bmrKcal]);
-
-  const simulationResult = React.useMemo(() => {
-    if (!data || dailyCaloriesOut <= 0) return null;
-    const muscleMax = computeMuscleGlycogenMaxKcal(data.weightKg, data.bodyFatPct);
-    const now = new Date();
-    const hoursElapsedNow = isViewingToday ? Math.max(1, now.getHours() + now.getMinutes() / 60) : 24;
-    const projectedFullDayScoredOut =
-      isViewingToday && hoursElapsedNow < 23 && scoredCaloriesOut < bmrKcal * 1.15
-        ? Math.max(scoredCaloriesOut, Math.round((scoredCaloriesOut / hoursElapsedNow) * 24), bmrKcal)
-        : scoredCaloriesOut;
-    return runMetabolicSimulation({
-      caloriesOut: projectedFullDayScoredOut,
-      exerciseCreditFraction: ACTIVITY_CREDIT_FRACTION,
-      alpertNumber,
-      foodLogs: todayFoodLogs ?? [],
-      exerciseLogs: todayExerciseLogs ?? [],
-      fitbitActivities: fitbitActivities ?? [],
-      caloriesIn: dailyCaloriesIn,
-      muscleGlycogenMaxKcal: muscleMax,
-      morningGlycogenPct,
-      hasCreatine: prefs?.profile?.hasCreatine,
-    });
-  }, [data, isViewingToday, dailyCaloriesOut, scoredCaloriesOut, bmrKcal, alpertNumber, todayFoodLogs, todayExerciseLogs, fitbitActivities, dailyCaloriesIn, morningGlycogenPct, prefs?.profile?.hasCreatine]);
-
-  // 3-Signal "Should I Eat Now?" & Alpert Breach Runway + Zero-AI 3-Day Nutritionist
-  const eatRunway = React.useMemo(() => {
-    const now = new Date();
-    const hoursElapsed = isViewingToday ? (now.getHours() + now.getMinutes() / 60) : 24;
-    return computeEatRunway({
-      caloriesIn: dailyCaloriesIn,
-      scoredCaloriesOut,
-      alpertNumber,
-      hoursElapsed,
-      proteinG: dailyProteinG,
-      proteinGoal,
-      bmrKcal,
-      prevDayDeficitKcal: isViewingToday ? prevDayDeficitKcal : 0,
-      slots: simulationResult?.slots,
-      foodLogs: todayFoodLogs ?? [],
-      recentDays: recentDaysSummary,
-    });
-  }, [isViewingToday, dailyCaloriesIn, scoredCaloriesOut, alpertNumber, dailyProteinG, proteinGoal, bmrKcal, prevDayDeficitKcal, simulationResult?.slots, todayFoodLogs, recentDaysSummary]);
-
-  // Cache today's projected midnight deficit so waking up fasted at 8:00 AM tomorrow matches tonight's breach clock to the minute
-  React.useEffect(() => {
-    if (!isViewingToday || dailyCaloriesIn <= 0) return;
-    try {
-      window.localStorage.setItem(
-        `vf_midnight_deficit_${todayStr}`,
-        String(Math.max(0, eatRunway.projectedMidnightDeficitKcal))
-      );
-    } catch {
-      // ignore storage errors
-    }
-  }, [isViewingToday, dailyCaloriesIn, todayStr, eatRunway.projectedMidnightDeficitKcal]);
-
-  // Auto-sync device when viewing Today if today's snapshot has no caloriesOut yet or last sync was >15m ago
-  React.useEffect(() => {
-    if (!isViewingToday || !user || !data?.isDeviceVerified) return;
-    if (data.connectedDevice === 'oura' || data.connectedDevice === 'withings') return;
-    const hasTodayBurn = !!(todayFitbitSnapshot?.caloriesOut && todayFitbitSnapshot.caloriesOut > 0);
-    const lastSynced = fitbitCreds?.lastSyncedAt ?? 0;
-    const isStale = Date.now() - lastSynced > 15 * 60 * 1000;
-    if (hasTodayBurn && !isStale) return;
-    if (hasAutoSyncedTodayRef.current === todayStr) return;
-    hasAutoSyncedTodayRef.current = todayStr;
-    const tzOffset = new Date().getTimezoneOffset();
-    syncFitbitData(user.uid, todayStr, tzOffset).catch((e) =>
-      console.warn('[DashboardCards AutoSync] Failed:', e)
+      where('date', '>=', cutoff90)
     );
-  }, [isViewingToday, user, data?.isDeviceVerified, data?.connectedDevice, todayFitbitSnapshot?.caloriesOut, fitbitCreds?.lastSyncedAt, todayStr]);
+  }, [user, db, cutoff90]);
 
-  const alpertPace = React.useMemo(() => {
-    if (!data || !isViewingToday) return null;
-    const now = new Date();
-    return computeAlpertPace({
-      caloriesIn: dailyCaloriesIn,
-      caloriesOut: dailyCaloriesOut,
-      alpertNumber,
-      hoursElapsed: now.getHours() + now.getMinutes() / 60,
-    });
-  }, [data, isViewingToday, dailyCaloriesIn, dailyCaloriesOut, alpertNumber]);
+  const { data: rawLogs, isLoading: isLogsLoading } =
+    useCollection<CoasterFoodLogEntry>(logs90Query);
 
-  // Active Level & Level History (Replaces Google Sheet right-side tracker)
-  const activeLevel: LevelConfig = resolveActiveLevel(prefs?.activeLevel);
-  const levelHistory: LevelConfig[] = prefs?.levelHistory ?? DEFAULT_LEVEL_HISTORY;
-
-  const levelProgress = React.useMemo(
-    () =>
-      computeLevelProgress(activeLevel, data?.history ?? [], {
-        todayGain: isViewingToday ? dailyAlpertScore : null,
-        todayIso: todayStr,
-      }),
-    [activeLevel, data?.history, isViewingToday, dailyAlpertScore, todayStr]
+  const activeLogs = useMemo(
+    () => (rawLogs ?? []).filter((entry) => !entry.ignored),
+    [rawLogs]
   );
 
-  const openLevelEditor = (lvl: LevelConfig) => {
-    setEditLevelName(lvl.name);
-    setEditLevelStart(lvl.startDate);
-    setEditLevelTarget(String(lvl.targetPoints));
-    setEditLevelDeadline(lvl.targetDate ?? '');
-    setEditLevelOffset(String(lvl.startingPointsOffset ?? 0));
-    setEditLevelNotes(lvl.notes ?? '');
-    setLevelEditorOpen(true);
-  };
+  const selectedDayLogs = useMemo(() => {
+    return activeLogs
+      .filter((entry) => entry.date === selectedDateStr)
+      .sort((a, b) => (b.consumedAt || '00:00').localeCompare(a.consumedAt || '00:00'));
+  }, [activeLogs, selectedDateStr]);
 
-  const handleSaveActiveLevel = async () => {
-    if (!user) return;
-    const updated: LevelConfig = {
-      ...activeLevel,
-      name: editLevelName.trim() || 'Active Level',
-      startDate: editLevelStart || todayStr,
-      targetPoints: Math.max(50, Number(editLevelTarget) || 1000),
-      targetDate: editLevelDeadline.trim() || undefined,
-      startingPointsOffset: Number(editLevelOffset) || 0,
-      notes: editLevelNotes.trim() || undefined,
-      status: 'active',
-    };
-    await healthService.updateUserPreferences(db, user.uid, { activeLevel: updated });
-    setLevelEditorOpen(false);
-    toast({ title: 'Level Updated', description: `${updated.name} (Target: ${updated.targetPoints.toLocaleString()} pts from ${updated.startDate})` });
-  };
+  const trendSummary = useMemo(
+    () => computeTrendSummary(activeLogs, selectedDateStr),
+    [activeLogs, selectedDateStr]
+  );
 
-  const handleArchiveAndStartNewLevel = async (preset?: Partial<LevelConfig>) => {
-    if (!user) return;
-    const archivedCurrent: LevelConfig = {
-      ...activeLevel,
-      endDate: todayStr,
-      status: levelProgress.isTargetMet ? 'completed' : 'retry',
-      snapshotTotalPoints: levelProgress.totalPoints,
-      snapshotDays: Math.max(1, levelProgress.daysScored),
-      engineEra: `v${CURRENT_SCORING_RELEASE.version} ${CURRENT_SCORING_RELEASE.codename}`,
-    };
-    const nextHistory = [
-      ...levelHistory.filter((l) => l.id !== archivedCurrent.id),
-      archivedCurrent,
-    ];
-    const nextLevel: LevelConfig = {
-      id: `level-${Date.now()}`,
-      name: preset?.name || editLevelName.trim() || 'New Lock-In Block',
-      startDate: preset?.startDate || todayStr,
-      targetPoints: preset?.targetPoints ?? (Math.max(50, Number(editLevelTarget) || 1000)),
-      targetDate: preset?.targetDate || editLevelDeadline.trim() || undefined,
-      startingPointsOffset: preset?.startingPointsOffset ?? 0,
-      status: 'active',
-      engineEra: `v${CURRENT_SCORING_RELEASE.version} ${CURRENT_SCORING_RELEASE.codename}`,
-      notes: preset?.notes || editLevelNotes.trim() || undefined,
-    };
-    await healthService.updateUserPreferences(db, user.uid, {
-      activeLevel: nextLevel,
-      levelHistory: nextHistory,
-    });
-    setLevelEditorOpen(false);
-    toast({
-      title: 'New Level Started',
-      description: `Archived "${archivedCurrent.name}" (${archivedCurrent.snapshotTotalPoints} pts) and started "${nextLevel.name}".`,
-    });
-  };
+  const dayStats = useMemo(() => {
+    let totalUnits = 0;
+    let alcoholCount = 0;
+    let zeroProofCount = 0;
+    let clearCount = 0;
 
-  const handleSwitchPresetLevel = async (preset: LevelConfig) => {
-    if (!user) return;
-    await healthService.updateUserPreferences(db, user.uid, {
-      activeLevel: { ...preset, status: 'active', endDate: undefined },
-    });
-    setLevelEditorOpen(false);
-    toast({
-      title: `Switched to ${preset.name}`,
-      description: `Tracking from ${preset.startDate} toward ${preset.targetPoints.toLocaleString()} pts.`,
-    });
-  };
-
-  // Zero-AI Quick Log handlers
-  const handleQuickLogNickname = async (nickKey: string, nick: FoodNickname) => {
-    if (!user || isLoggingQuick) return;
-    setIsLoggingQuick(true);
-    try {
-      const now = new Date();
-      const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-      await healthService.logFood(db, user.uid, {
-        date: selectedDateStr,
-        meal: nick.meal || 'snack',
-        name: `${nick.nickname}${nick.description ? ` (${nick.description})` : ''}`,
-        portionG: 300,
-        calories: nick.totalCalories,
-        proteinG: nick.totalProteinG,
-        carbsG: nick.totalCarbsG || 0,
-        fatG: nick.totalFatG || 0,
-        fiberG: 0,
-        source: 'user_estimate',
-        consumedAt: hhmm,
-      });
-      if (isViewingToday) {
-        await healthService.updateHealthData(db, user.uid, {
-          dailyCaloriesIn: dailyCaloriesIn + nick.totalCalories,
-          dailyProteinG: dailyProteinG + nick.totalProteinG,
-          dailyCarbsG: dailyCarbsG + (nick.totalCarbsG || 0),
-        });
+    for (const item of selectedDayLogs) {
+      if (isClearDayEntry(item)) {
+        clearCount += 1;
+        continue;
       }
-      if (prefs?.foodNicknames) {
-        const updatedNicknames = {
-          ...prefs.foodNicknames,
-          [nickKey]: { ...nick, lastUsedAt: Date.now() },
-        };
-        await healthService.updateUserPreferences(db, user.uid, { foodNicknames: updatedNicknames });
+      const u = getEntryUnits(item);
+      totalUnits += u;
+      if (isZeroProofEntry(item) || u === 0) {
+        zeroProofCount += 1;
+      } else {
+        alcoholCount += 1;
       }
+    }
+
+    totalUnits = Math.round(totalUnits * 10) / 10;
+    const isClear = clearCount > 0 && alcoholCount === 0 && totalUnits === 0;
+    const isZeroProofOnly = zeroProofCount > 0 && alcoholCount === 0 && totalUnits === 0;
+
+    return {
+      totalUnits,
+      alcoholCount,
+      zeroProofCount,
+      isClear,
+      isZeroProofOnly,
+    };
+  }, [selectedDayLogs]);
+
+  const effectiveOz = useMemo(() => {
+    const raw = parseFloat(volumeInput);
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return volumeUnit === 'ml' ? mlToOz(raw) : raw;
+  }, [volumeInput, volumeUnit]);
+
+  const effectiveAbv = useMemo(() => {
+    const raw = parseFloat(abvInput);
+    if (!Number.isFinite(raw) || raw < 0) return 0;
+    return Math.min(95, raw);
+  }, [abvInput]);
+
+  const liveCalculatorUnits = useMemo(
+    () => calculateStandardUnits(effectiveOz, effectiveAbv),
+    [effectiveOz, effectiveAbv]
+  );
+
+  const persistPour = async (pour: DashboardPourInput) => {
+    if (onLogPour) {
+      await onLogPour(pour);
+      return;
+    }
+    if (!user || !db) return;
+    await healthService.logFood(db, user.uid, {
+      name: pour.name,
+      portionG: Math.round(pour.volumeOz * 29.5735),
+      calories: 0,
+      proteinG: 0,
+      carbsG: 0,
+      fatG: 0,
+      fiberG: 0,
+      alcoholDrinks: pour.units,
+      standardUnits: pour.units,
+      volumeOz: Math.round(pour.volumeOz * 10) / 10,
+      abvPct: Math.round(pour.abvPct * 10) / 10,
+      drinkCategory: pour.category,
+      isZeroProof: Boolean(pour.zeroProof),
+      isClearDay: Boolean(pour.clearDay),
+      source: 'user_estimate',
+      meal: pour.clearDay ? 'snack' : 'dinner',
+      consumedAt: pour.consumedAt,
+      date: pour.date,
+    } as FoodLogEntry);
+  };
+
+  const handlePresetTap = async (preset: DrinkPreset) => {
+    if (!user && !onLogPour) {
       toast({
-        title: `Logged "${nick.nickname}" (Zero AI)`,
-        description: `+${nick.totalCalories} kcal · +${nick.totalProteinG}g protein added to ${selectedDateStr}.`,
+        variant: 'destructive',
+        title: 'Sign in required',
+        description: 'Sign in to save pours to your coaster.',
       });
-    } catch (err) {
-      console.error('[handleQuickLogNickname] Failed:', err);
-      toast({ variant: 'destructive', title: 'Quick Log Failed', description: 'Could not save food entry.' });
+      return;
+    }
+    setIsLogging(true);
+    try {
+      await persistPour({
+        name: preset.label,
+        volumeOz: preset.volumeOz,
+        abvPct: preset.abvPct,
+        units: preset.units,
+        category: preset.category,
+        zeroProof: preset.zeroProof,
+        clearDay: preset.clearDay,
+        date: selectedDateStr,
+        consumedAt: resolveCurrentHHMM(),
+      });
+      toast({
+        title: preset.clearDay
+          ? 'Clear Day recorded (0.0u)'
+          : `Added ${preset.shortLabel} (${formatUnits(preset.units)})`,
+        description:
+          selectedDateStr === todayKey ? 'Saved to Today’s Coaster.' : `Saved to ${selectedDateStr}.`,
+      });
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Could not log pour',
+        description: 'Try again in a moment.',
+      });
     } finally {
-      setIsLoggingQuick(false);
+      setIsLogging(false);
     }
   };
 
-  // Zero-AI 1-Tap Food Entry Removal (for accidental clicks or duplicates)
-  const handleRemoveFoodEntry = async (entry: FoodLogEntry) => {
-    if (!user || !entry.id || removingFoodId) return;
-    setRemovingFoodId(entry.id);
+  const handleCustomLog = async () => {
+    if (!user && !onLogPour) return;
+    if (effectiveOz <= 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Enter a pour volume',
+        description: 'Volume must be greater than 0.',
+      });
+      return;
+    }
+    const isZero = effectiveAbv === 0;
+    const defaultLabel = isZero
+      ? `Zero-Proof Pour (${Math.round(effectiveOz * 10) / 10} oz)`
+      : `Pour (${Math.round(effectiveOz * 10) / 10} oz @ ${effectiveAbv}%)`;
+    const drinkName = customName.trim() || defaultLabel;
+
+    setIsLogging(true);
+    try {
+      await persistPour({
+        name: drinkName,
+        volumeOz: Math.round(effectiveOz * 10) / 10,
+        abvPct: Math.round(effectiveAbv * 10) / 10,
+        units: liveCalculatorUnits,
+        category: isZero ? 'zero-proof' : 'cocktail',
+        zeroProof: isZero,
+        clearDay: false,
+        date: selectedDateStr,
+        consumedAt: resolveCurrentHHMM(),
+      });
+      toast({
+        title: `Logged ${drinkName}`,
+        description: `${formatUnits(liveCalculatorUnits)} added to your coaster.`,
+      });
+      setCustomName('');
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Could not save pour',
+        description: 'Try again in a moment.',
+      });
+    } finally {
+      setIsLogging(false);
+    }
+  };
+
+  const handleToggleVolumeUnit = (nextUnit: 'oz' | 'ml') => {
+    if (nextUnit === volumeUnit) return;
+    const currentVal = parseFloat(volumeInput);
+    if (Number.isFinite(currentVal) && currentVal > 0) {
+      if (nextUnit === 'ml') {
+        setVolumeInput(String(Math.round(currentVal * 29.5735)));
+      } else {
+        setVolumeInput(String(Math.round(mlToOz(currentVal) * 10) / 10));
+      }
+    } else {
+      setVolumeInput(nextUnit === 'ml' ? '355' : '12');
+    }
+    setVolumeUnit(nextUnit);
+  };
+
+  const handleDeleteEntry = async (entry: CoasterFoodLogEntry) => {
+    if (!user || !db) return;
     try {
       await healthService.setFoodEntryIgnored(db, user.uid, entry.id, true);
-      const remaining = (todayFoodLogs ?? []).filter((e) => !e.ignored && e.id !== entry.id);
-      if (isViewingToday) {
-        const newCal = remaining.reduce((s, e) => s + (e.calories || 0), 0);
-        const newProt = remaining.reduce((s, e) => s + (e.proteinG || 0), 0);
-        const newCarbs = remaining.reduce((s, e) => s + (e.carbsG || 0), 0);
-        await healthService.updateHealthData(db, user.uid, {
-          dailyCaloriesIn: newCal,
-          dailyProteinG: newProt,
-          dailyCarbsG: newCarbs,
-        });
-      }
-      toast({
-        title: `Removed "${entry.name}"`,
-        description: `-${entry.calories} kcal · -${entry.proteinG}g protein removed from ${selectedDateStr}.`,
-      });
-    } catch (err) {
-      console.error('[handleRemoveFoodEntry] Failed:', err);
-      toast({ variant: 'destructive', title: 'Remove Failed', description: 'Could not remove food entry.' });
-    } finally {
-      setRemovingFoodId(null);
+      toast({ title: 'Removed from coaster', description: entry.name });
+    } catch {
+      toast({ variant: 'destructive', title: 'Could not remove pour' });
     }
   };
 
-  // Zero-AI 1-Tap Move Food Entry to Last Night (for items logged today that were actually eaten yesterday evening)
-  const handleMoveFoodToLastNight = async (entry: FoodLogEntry) => {
-    if (!user || !entry.id || removingFoodId) return;
-    setRemovingFoodId(entry.id);
+  const handleMoveToPreviousDay = async (entry: CoasterFoodLogEntry) => {
+    if (!user || !db) return;
+    const prevDate = shiftDateKey(selectedDateStr, -1);
     try {
       await healthService.updateLedgerEntryTiming(db, user.uid, {
         id: entry.id,
         type: 'food',
-        oldDate: entry.date,
-        newDate: prevDateStr,
-        newTime: '20:30',
+        oldDate: selectedDateStr,
+        newDate: prevDate,
+        newTime: entry.consumedAt || '22:00',
         meal: 'dinner',
-        todayIso: todayStr,
+        todayIso: todayKey,
       });
-      rescoreRecentDays(user.uid, todayStr, 14).catch(() => {});
       toast({
-        title: `Moved "${entry.name}" to Last Night`,
-        description: `Shifted to ${prevDateStr} at 8:30 PM (Dinner). You can also drag entries in the Ledger tab to fine-tune timing.`,
+        title: 'Moved to night before',
+        description: `${entry.name} moved to ${prevDate}.`,
       });
-    } catch (err) {
-      console.error('[handleMoveFoodToLastNight] Failed:', err);
-      toast({ variant: 'destructive', title: 'Move Failed', description: 'Could not move food entry to last night.' });
-    } finally {
-      setRemovingFoodId(null);
+    } catch {
+      toast({ variant: 'destructive', title: 'Could not move pour date' });
     }
   };
 
-  const handleQuickCustomFoodSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user || isLoggingQuick) return;
-    const kcal = Math.max(0, Number(quickCalories) || 0);
-    const prot = Math.max(0, Number(quickProtein) || 0);
-    const carbs = Math.max(0, Number(quickCarbs) || 0);
-    const fat = Math.max(0, Number(quickFat) || 0);
-    const name = quickItemName.trim() || 'Quick Entry';
-    if (kcal === 0 && prot === 0 && !quickItemName.trim()) return;
+  const sunnyCard = SUNNY_SWAP_CORNER[sunnyIndex % SUNNY_SWAP_CORNER.length];
 
-    const supplementFields = parseSupplementFieldsFromText(name);
-    const inferredPortionG =
-      supplementFields.betaAlanineG ??
-      supplementFields.creatineG ??
-      (kcal === 0 && prot === 0 ? 5 : 250);
-
-    setIsLoggingQuick(true);
-    try {
-      const now = new Date();
-      const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-      await healthService.logFood(db, user.uid, {
-        date: selectedDateStr,
-        meal: quickMeal,
-        name,
-        portionG: inferredPortionG,
-        calories: kcal,
-        proteinG: prot,
-        carbsG: carbs,
-        fatG: fat,
-        fiberG: 0,
-        ...supplementFields,
-        source: 'user_estimate',
-        consumedAt: hhmm,
-      });
-      if (isViewingToday && (kcal > 0 || prot > 0 || carbs > 0)) {
-        await healthService.updateHealthData(db, user.uid, {
-          dailyCaloriesIn: dailyCaloriesIn + kcal,
-          dailyProteinG: dailyProteinG + prot,
-          dailyCarbsG: dailyCarbsG + carbs,
-        });
-      }
-      setQuickItemName('');
-      setQuickCalories('');
-      setQuickProtein('');
-      setQuickCarbs('');
-      setQuickFat('');
-      setQuickFoodOpen(false);
-      const suppBadges = formatSupplementBadges({ name, ...supplementFields });
-      toast({
-        title: `Logged ${name} (Zero AI)`,
-        description:
-          suppBadges.length > 0 && kcal === 0
-            ? `${suppBadges.join(' · ')} recorded directly to ${selectedDateStr} Ledger.`
-            : `+${kcal} kcal · +${prot}g protein recorded directly to Ledger.`,
-      });
-    } catch (err) {
-      console.error('[handleQuickCustomFoodSubmit] Failed:', err);
-      toast({ variant: 'destructive', title: 'Log Failed', description: 'Could not write to food log.' });
-    } finally {
-      setIsLoggingQuick(false);
-    }
+  const selectedDayEntry: HistoryEntry = {
+    isoDate: selectedDateStr,
+    date: formatDateHeading(selectedDateStr, todayKey),
+    gain: 0,
+    status: 'Stable',
+    detail: `${formatUnits(dayStats.totalUnits)} • ${dayStats.alcoholCount} pours`,
+    equity: dayStats.totalUnits,
   };
-
-  // Zero-AI Deterministic Score & Day Note Saver
-  const handleLockDayScore = async () => {
-    if (!user || !data || isLockingScore) return;
-    setIsLockingScore(true);
-    try {
-      const fastingH = Math.max(0, Number(lockFastingHours) || 0);
-      const drinks = Math.max(0, Number(lockAlcoholDrinks) || 0);
-      const sleepH = data.sleepHours ?? 7;
-      const calc = calculateDailyVFScore({
-        caloriesIn: dailyCaloriesIn,
-        caloriesOut: dailyCaloriesOut,
-        proteinG: dailyProteinG,
-        proteinGoal,
-        fastingHours: fastingH,
-        alcoholDrinks: drinks,
-        sleepHours: sleepH,
-        seedOilMeals: 0,
-        weightKg: data.weightKg,
-        bodyFatPct: data.bodyFatPct,
-        heightCm: data.heightCm,
-        age: prefs?.profile?.age,
-        foodLogs: todayFoodLogs ?? undefined,
-        prevFoodLogs: prevFoodLogs ?? undefined,
-        exerciseLogs: todayExerciseLogs ?? undefined,
-        fitbitActivities,
-      });
-
-      const [yr, mo, dy] = selectedDateStr.split('-').map(Number);
-      const displayDate = new Date(yr, (mo || 1) - 1, dy || 1).toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-      });
-
-      const existingHistory = [...(data.history ?? [])];
-      const existingIdx = existingHistory.findIndex((h) => (h.isoDate || h.date) === selectedDateStr);
-      const prevGain = existingIdx >= 0 ? existingHistory[existingIdx].gain : 0;
-      const newEquity = (data.visceralFatPoints || 0) - prevGain + calc.score;
-
-      const updatedEntry: HistoryEntry = {
-        date: displayDate,
-        isoDate: selectedDateStr,
-        gain: calc.score,
-        status: calc.score >= 0 ? 'Bullish' : 'Correction',
-        detail: calc.summary,
-        equity: existingIdx >= 0 ? existingHistory[existingIdx].equity - prevGain + calc.score : newEquity,
-        breakdown: {
-          caloriesIn: dailyCaloriesIn,
-          caloriesOut: dailyCaloriesOut,
-          proteinG: dailyProteinG,
-          proteinGoal,
-          sleepHours: sleepH,
-          ...calc.breakdown,
-        },
-        scoringVersion: CURRENT_SCORING_RELEASE.version,
-        dayNote: lockDayNote.trim() || undefined,
-      };
-
-      if (existingIdx >= 0) {
-        existingHistory[existingIdx] = updatedEntry;
-      } else {
-        existingHistory.push(updatedEntry);
-      }
-
-      await healthService.updateHealthData(db, user.uid, {
-        visceralFatPoints: newEquity,
-        history: existingHistory,
-      });
-
-      setScoreLockOpen(false);
-      toast({
-        title: `Scored ${selectedDateStr}: ${calc.score >= 0 ? '+' : ''}${calc.score} pts`,
-        description: `Saved to Ledger with v${CURRENT_SCORING_RELEASE.version} (${CURRENT_SCORING_RELEASE.codename}) — 0 Gemini tokens used.`,
-      });
-    } catch (err) {
-      console.error('[handleLockDayScore] Failed:', err);
-      toast({ variant: 'destructive', title: 'Score Save Failed', description: 'Could not update ledger.' });
-    } finally {
-      setIsLockingScore(false);
-    }
-  };
-
-  const nowSlot = React.useMemo(() => {
-    if (!isViewingToday) return null;
-    const now = new Date();
-    const nowMin = now.getHours() * 60 + now.getMinutes();
-    return Math.max(0, Math.min(72, Math.round((nowMin - 6 * 60) / 15)));
-  }, [isViewingToday]);
-
-  if (isLoading) {
-    return (
-      <div className="flex flex-col h-full space-y-6 p-6 md:p-10 bg-background">
-        <div className="flex items-center justify-between px-1">
-          <h2 className="text-[12px] font-bold text-muted-foreground uppercase tracking-widest italic">Daily Cockpit</h2>
-          <div className="flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin text-primary" />
-            <span className="text-[12px] font-bold text-muted-foreground uppercase">Syncing Ledger...</span>
-          </div>
-        </div>
-        <div className="space-y-4">
-          <div className="h-44 bg-muted/50 animate-pulse rounded-2xl" />
-          <div className="h-36 bg-muted/50 animate-pulse rounded-2xl" />
-          <div className="h-40 bg-muted/50 animate-pulse rounded-2xl" />
-        </div>
-      </div>
-    );
-  }
-
-  if (!data) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full min-h-[500px] p-6 text-center bg-background space-y-8">
-        <div className="p-6 bg-primary/10 rounded-full">
-          <ShieldAlert className="w-16 h-16 text-primary animate-pulse" />
-        </div>
-        <div className="space-y-4">
-          <h2 className="text-2xl font-black tracking-tight">Portfolio Discovery</h2>
-          <p className="text-base text-muted-foreground max-w-xl mx-auto leading-relaxed">
-            the CFO is initializing your personal ledger. This secure handshake ensures your assets are properly allocated before the first audit begins.
-          </p>
-        </div>
-        <div className="flex items-center gap-3 text-primary">
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-[12px] font-black uppercase tracking-widest">Establishing Connection...</span>
-        </div>
-      </div>
-    );
-  }
-
-  const proteinProgress = Math.min(100, (dailyProteinG / proteinGoal) * 100);
-  const scoreHasFoodPending = isViewingToday && dailyCaloriesIn === 0;
-  const scoreHasDevicePending = isViewingToday && (data && !data.isDeviceVerified);
-  const pastScoreProvisional = !isViewingToday && !!data.isDeviceVerified && !!historyEntry && (
-    (!!fitbitForDate?.capturedOnDate && fitbitForDate.capturedOnDate <= selectedDateStr)
-  );
-
-  const selectedDayVintage = inferScoringRelease(selectedHistoryEntry ?? { isoDate: selectedDateStr });
-  const selectedDayNote = getEffectiveDayNote(selectedHistoryEntry ?? { isoDate: selectedDateStr });
-
-  const activeTodayFoodLogs = (todayFoodLogs ?? []).filter((e) => !e.ignored);
-
-  const sortedNicknames = (() => {
-    const entries = Object.entries(prefs?.foodNicknames ?? {});
-    const recentActive = (recentFoodLogs ?? []).filter((f) => !f.ignored);
-
-    const withRecency = entries.map(([key, nick]) => {
-      let latestLogMs = nick.lastUsedAt ?? 0;
-      const nickLower = (nick.nickname || key).toLowerCase();
-      const descLower = (nick.description || '').toLowerCase();
-
-      for (const f of recentActive) {
-        const fname = (f.name || '').toLowerCase();
-        const nameMatches =
-          (nickLower && fname.includes(nickLower)) ||
-          (descLower && descLower.length >= 5 && fname.includes(descLower));
-        const macroMatches =
-          nick.totalCalories > 0 &&
-          f.calories === nick.totalCalories &&
-          f.proteinG === nick.totalProteinG;
-
-        if (nameMatches || macroMatches) {
-          const tsMs =
-            f.timestamp instanceof Timestamp
-              ? f.timestamp.toMillis()
-              : f.date
-                ? new Date(f.date).getTime()
-                : 0;
-          if (tsMs > latestLogMs) latestLogMs = tsMs;
-        }
-      }
-      return { key, nick, latestLogMs };
-    });
-
-    withRecency.sort((a, b) => {
-      if (b.latestLogMs !== a.latestLogMs) return b.latestLogMs - a.latestLogMs;
-      return (a.nick.nickname || a.key).localeCompare(b.nick.nickname || b.key);
-    });
-
-    const q = nicknameQuery.trim().toLowerCase();
-    if (!q) return withRecency;
-    return withRecency.filter(({ key, nick }) => {
-      const nMatch = (nick.nickname || key).toLowerCase().includes(q);
-      const dMatch = (nick.description || '').toLowerCase().includes(q);
-      const iMatch = nick.items?.some((it) => it.toLowerCase().includes(q));
-      return nMatch || dMatch || iMatch;
-    });
-  })();
-
-  const RECENT_TICKER_LIMIT = 8;
-  const visibleNicknames =
-    showAllNicknames || nicknameQuery.trim().length > 0
-      ? sortedNicknames
-      : sortedNicknames.slice(0, RECENT_TICKER_LIMIT);
-
-  const handleConnectFitbit = async () => {
-    if (!user) return;
-    const provider = 'google' as const;
-    const clientId = process.env.NEXT_PUBLIC_GOOGLE_HEALTH_CLIENT_ID || process.env.NEXT_PUBLIC_FITBIT_CLIENT_ID;
-    const providerLabel = 'Google Health';
-
-    if (!clientId) {
-      toast({
-        variant: 'destructive',
-        title: `${providerLabel} Unavailable`,
-        description: `${providerLabel} linking is temporarily unavailable.`,
-      });
-      return;
-    }
-    window.location.href = fitbitService.getAuthUrl(user.uid, provider);
-  };
-
-  const handleResync = async () => {
-    if (!user || isSyncing) return;
-    setIsSyncing(true);
-    let result: SyncResult | null = null;
-    try {
-      const tzOffset = new Date().getTimezoneOffset();
-      if (isViewingToday) {
-        const localDate = new Date().toLocaleDateString('en-CA');
-        result = await syncFitbitData(user.uid, localDate, tzOffset);
-      } else {
-        result = await syncFitbitSnapshot(user.uid, selectedDateStr, tzOffset);
-      }
-    } catch (e) {
-      console.error('[handleResync] Fitbit sync threw:', e);
-    } finally {
-      setIsSyncing(false);
-    }
-    if (!result) {
-      toast({ variant: 'destructive', title: 'Sync Failed', description: 'The server did not respond.' });
-    } else if (result.success) {
-      toast({
-        title: 'Sync Complete',
-        description: isViewingToday ? 'Device data refreshed.' : `${selectedDateStr} refreshed from device.`,
-      });
-    } else {
-      toast({ variant: 'destructive', title: 'Sync Failed', description: result.details?.message || 'Could not sync device.' });
-    }
-  };
-
-  const handleDisconnectFitbit = async () => {
-    if (!user) return;
-    const result = await disconnectFitbit(user.uid);
-    if (result.ok) {
-      toast({ title: 'Device Disconnected', description: 'Your device connection has been removed.' });
-    }
-  };
-
-  const handleConnectOura = async () => {
-    if (!user) return;
-    const result = await getOuraAuthUrl(user.uid, window.location.origin);
-    if ('error' in result || 'mock' in result) {
-      toast({ variant: 'destructive', title: 'Oura Unavailable', description: 'Oura linking is currently unavailable.' });
-      return;
-    }
-    window.location.href = result.url;
-  };
-
-  const handleResyncOura = async () => {
-    if (!user || isOuraSyncing) return;
-    setIsOuraSyncing(true);
-    let result: OuraSyncResult | null = null;
-    try {
-      const localDate = new Date().toLocaleDateString('en-CA');
-      result = await syncOuraData(user.uid, localDate);
-    } catch (e) {
-      console.error('[handleResyncOura] threw:', e);
-    } finally {
-      setIsOuraSyncing(false);
-    }
-    if (result?.success) {
-      toast({ title: 'Sync Complete', description: 'Oura data refreshed.' });
-    } else {
-      toast({ variant: 'destructive', title: 'Oura Sync Failed', description: 'Could not refresh Oura data.' });
-    }
-  };
-
-  const handleDisconnectOura = async () => {
-    if (!user) return;
-    const result = await disconnectOura(user.uid);
-    if (result.ok) toast({ title: 'Oura Disconnected' });
-  };
-
-  const handleConnectWithings = async () => {
-    if (!user) return;
-    const result = await getWithingsAuthUrl(user.uid, window.location.origin);
-    if ('error' in result) {
-      toast({ variant: 'destructive', title: 'Withings Connection', description: result.error });
-      return;
-    }
-    window.location.href = result.url;
-  };
-
-  const handleResyncWithings = async () => {
-    if (!user || isWithingsSyncing) return;
-    setIsWithingsSyncing(true);
-    try {
-      const localDate = new Date().toLocaleDateString('en-CA');
-      const result = await syncWithingsData(user.uid, localDate);
-      if (result.success) toast({ title: 'Withings Sync Complete' });
-    } finally {
-      setIsWithingsSyncing(false);
-    }
-  };
-
-  const handleDisconnectWithings = async () => {
-    if (!user) return;
-    const result = await disconnectWithings(user.uid);
-    if (result.ok) toast({ title: 'Withings Disconnected' });
-  };
-
-  const runwayStyles = {
-    clear: {
-      bg: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-950',
-      badge: 'bg-emerald-600 text-white',
-      label: 'RUNWAY CLEAR',
-    },
-    eat_soon: {
-      bg: 'bg-amber-500/10 border-amber-500/30 text-amber-950',
-      badge: 'bg-amber-500 text-white',
-      label: 'FEED WINDOW APPROACHING',
-    },
-    eat_now: {
-      bg: 'bg-red-500/10 border-red-500/30 text-red-950',
-      badge: 'bg-red-600 text-white',
-      label: 'EAT NOW — PROTECT MUSCLE',
-    },
-  }[eatRunway.status];
 
   return (
-    <div className="flex flex-col gap-6 p-4 sm:p-6 md:p-10 pb-24 bg-background h-full overflow-y-auto">
-      {/* ── Compact Top Bar: Date Picker + Slim Device Sync Pill ── */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-        <div className="flex items-center gap-2.5">
-          <h2 className="text-xs sm:text-sm font-black text-muted-foreground uppercase tracking-[0.2em] italic">
-            {isViewingToday ? 'Daily Cockpit' : `Historical Cockpit · ${selectedDateStr}`}
-          </h2>
-          <span className="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black uppercase tracking-wider bg-slate-100 text-slate-700">
-            v{selectedDayVintage.version} {selectedDayVintage.codename}
-          </span>
-        </div>
+    <div className="space-y-5">
+      {/* Main Today Coaster Hero Card */}
+      <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-3xl overflow-hidden">
+        <CardHeader className="pb-4 border-b border-[#E8DFD1]/80 bg-gradient-to-br from-[#FFFDF9] via-[#FAF6F0] to-[#F6EDE0]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-[#C26D2D]">
+                Coaster Daily Ledger
+              </p>
+              <CardTitle className="text-xl sm:text-2xl font-black tracking-tight text-[#1F1B18] mt-0.5">
+                {formatDateHeading(selectedDateStr, todayKey)}
+              </CardTitle>
+            </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setEarningsModalOpen(true)}
-            data-testid="metrics-earnings-call-btn"
-            className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-amber-500/50 bg-slate-950 hover:bg-slate-900 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-amber-300 shadow-sm transition-colors"
-          >
-            <span>RUN 30-DAY EARNINGS CALL</span>
-          </button>
-          {!isViewingToday && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 px-2.5 text-xs font-black uppercase tracking-widest text-muted-foreground hover:text-foreground"
-              onClick={() => setSelectedDateStr(todayStr)}
-            >
-              <RotateCcw className="w-3.5 h-3.5 mr-1" />
-              Today
-            </Button>
-          )}
-          <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-3 text-xs font-black uppercase tracking-widest gap-1.5"
+            {/* Date Navigator */}
+            <div className="inline-flex items-center gap-1 rounded-full bg-[#FFFDF9] border border-[#E8DFD1] px-2 py-1 shadow-xs">
+              <button
+                type="button"
+                aria-label="Previous day"
+                onClick={() => setSelectedDateStr((prev) => shiftDateKey(prev, -1))}
+                className="p-1.5 rounded-full hover:bg-[#FAF6F0] text-[#6E6359] hover:text-[#1F1B18]"
               >
-                <CalendarIcon className="w-3.5 h-3.5" />
-                {isViewingToday ? 'Today' : selectedDateStr}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <Calendar
-                mode="single"
-                selected={selectedDateObj}
-                onSelect={handleDateSelect}
-                disabled={(date) => date > new Date()}
-                autoFocus
-              />
-            </PopoverContent>
-          </Popover>
-
-          {/* Compact Device Sync Pill */}
-          {data.isDeviceVerified && (data.connectedDevice === 'oura' || (!data.connectedDevice && ouraCreds)) ? (
-            <div className="flex items-center gap-1.5 bg-violet-50 border border-violet-200 rounded-lg px-2.5 py-1">
-              <OuraLogo className="w-4 h-4 text-violet-600" />
-              <span className="text-xs font-black uppercase text-violet-800 hidden sm:inline">
-                {ouraCreds?.lastSyncedAt ? formatTimeAgo(ouraCreds.lastSyncedAt) : 'Oura'}
-              </span>
-              <Button size="sm" variant="ghost" onClick={handleResyncOura} disabled={isOuraSyncing} className="h-6 px-1.5 text-xs font-black uppercase text-violet-700 hover:bg-violet-100">
-                {isOuraSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={handleDisconnectOura} className="h-6 px-1 text-violet-500 hover:text-violet-800" title="Disconnect Oura">
-                <Unplug className="w-3 h-3" />
-              </Button>
-            </div>
-          ) : data.isDeviceVerified && data.connectedDevice === 'withings' ? (
-            <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1">
-              <WithingsLogo className="w-4 h-4 text-blue-600" />
-              <span className="text-xs font-black uppercase text-blue-800 hidden sm:inline">
-                {withingsCreds?.lastSyncedAt ? formatTimeAgo(withingsCreds.lastSyncedAt) : 'Withings'}
-              </span>
-              <Button size="sm" variant="ghost" onClick={handleResyncWithings} disabled={isWithingsSyncing} className="h-6 px-1.5 text-xs font-black uppercase text-blue-700 hover:bg-blue-100">
-                {isWithingsSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={handleDisconnectWithings} className="h-6 px-1 text-blue-500 hover:text-blue-800" title="Disconnect Withings">
-                <Unplug className="w-3 h-3" />
-              </Button>
-            </div>
-          ) : data.isDeviceVerified ? (
-            <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1">
-              <FitbitLogo className="w-4 h-4 text-emerald-600" />
-              <span className="text-xs font-black uppercase text-emerald-800">
-                {fitbitCreds?.lastSyncedAt ? formatTimeAgo(fitbitCreds.lastSyncedAt) : (isLegacyFitbit ? 'Fitbit' : 'Health')}
-              </span>
-              <Button size="sm" variant="ghost" onClick={handleResync} disabled={isSyncing} className="h-6 px-2 text-xs font-black uppercase text-emerald-700 hover:bg-emerald-100">
-                {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
-                {isViewingToday ? 'Sync' : 'Sync Date'}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={handleDisconnectFitbit} className="h-6 px-1 text-emerald-500 hover:text-emerald-800" title="Disconnect Device">
-                <Unplug className="w-3 h-3" />
-              </Button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <Button size="sm" variant="outline" onClick={handleConnectFitbit} className="h-8 px-2.5 text-xs font-black uppercase border-emerald-200 text-emerald-700">
-                <FitbitLogo className="w-3.5 h-3.5 mr-1" /> Connect Health
-              </Button>
-              <Button size="sm" variant="outline" onClick={handleConnectOura} className="h-8 px-2.5 text-xs font-black uppercase border-violet-200 text-violet-700">
-                <OuraLogo className="w-3.5 h-3.5 mr-1" /> Oura
-              </Button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Bloomberg / CRT Hybrid Ticker Tape & Multimodal Receipt Auditor ── */}
-      <HybridTickerTerminal
-        collapsibleOnMobile
-        healthData={data}
-        targetDateIso={selectedDateStr}
-      />
-
-      {/* ── ROW 1: Daily Cockpit (VF Score + Calories + 3-Signal "Should I Eat Now?" & Protein To Go) ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* Left 5 cols: Today's VF Score + Explicit Calories In / Out / Deficit */}
-        <Card className="lg:col-span-5 border-none shadow-lg overflow-hidden flex flex-col justify-between">
-          <div
-            className={`p-5 sm:p-6 flex-1 flex flex-col justify-between ${
-              dailyAlpertScore !== null && dailyAlpertScore >= 0
-                ? 'bg-gradient-to-br from-emerald-600 to-emerald-800'
-                : dailyAlpertScore !== null
-                  ? 'bg-gradient-to-br from-red-600 to-red-800'
-                  : 'bg-gradient-to-br from-slate-700 to-slate-900'
-            } text-white`}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="text-xs sm:text-sm font-black uppercase tracking-[0.18em] opacity-90">
-                    {isViewingToday ? "Today's VF Score" : `${selectedDateStr} Score`}
-                  </p>
-                  <span className="px-2 py-0.5 rounded bg-white/15 text-xs font-black uppercase tracking-wider">
-                    v{selectedDayVintage.version}
-                  </span>
-                </div>
-                {selectedDayNote && (
-                  <p className="text-xs sm:text-sm font-bold text-amber-200 mt-1 line-clamp-1 italic">
-                    “{selectedDayNote}”
-                  </p>
-                )}
-              </div>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setScoreLockOpen((v) => !v)}
-                className="h-8 px-3 text-xs font-black uppercase tracking-wider bg-white/15 hover:bg-white/25 text-white border-none shrink-0"
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <label className="inline-flex items-center gap-1.5 px-2 text-xs font-semibold text-[#1F1B18] cursor-pointer">
+                <Calendar className="w-3.5 h-3.5 text-[#C26D2D]" />
+                <input
+                  type="date"
+                  max={todayKey}
+                  value={selectedDateStr}
+                  onChange={(e) => {
+                    if (e.target.value && e.target.value <= todayKey) {
+                      setSelectedDateStr(e.target.value);
+                    }
+                  }}
+                  className="bg-transparent text-xs font-bold text-[#1F1B18] focus:outline-none cursor-pointer"
+                />
+              </label>
+              <button
+                type="button"
+                aria-label="Next day"
+                disabled={selectedDateStr >= todayKey}
+                onClick={() =>
+                  setSelectedDateStr((prev) =>
+                    prev < todayKey ? shiftDateKey(prev, 1) : prev
+                  )
+                }
+                className="p-1.5 rounded-full hover:bg-[#FAF6F0] text-[#6E6359] hover:text-[#1F1B18] disabled:opacity-35"
               >
-                <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
-                {selectedHistoryEntry ? 'Update Score / Note' : 'Lock Score'}
-              </Button>
-            </div>
-
-            <div className="my-5 flex items-baseline justify-between gap-4">
-              <div className="flex items-baseline gap-2.5">
-                <span className="text-6xl sm:text-7xl font-black italic tracking-tighter">
-                  {dailyAlpertScore !== null ? (
-                    <>
-                      {dailyAlpertScore > 0 ? '+' : ''}
-                      {dailyAlpertScore}
-                      {(scoreHasFoodPending || scoreHasDevicePending || pastScoreProvisional) && (
-                        <span className="text-3xl opacity-60">*</span>
-                      )}
-                    </>
-                  ) : (
-                    '—'
-                  )}
-                </span>
-                <span className="text-sm sm:text-base font-black uppercase opacity-80">pts</span>
-              </div>
-
-              {/* Protein To Go Pill right inside the hero card for instant glanceability */}
-              {showProtein && (
-                <div className="text-right bg-black/25 rounded-xl px-4 py-2.5 backdrop-blur-sm">
-                  <p className="text-xs font-black uppercase tracking-wider opacity-85">Protein To Go</p>
-                  <p className="text-2xl sm:text-3xl font-black italic tracking-tight text-amber-300">
-                    {eatRunway.proteinToGoG > 0 ? `${eatRunway.proteinToGoG}g` : 'HIT ✓'}
-                  </p>
-                  <p className="text-xs font-bold opacity-85">
-                    {dailyProteinG}g / {proteinGoal}g
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Explicit 3-Column Calorie Ledger */}
-            <div className="grid grid-cols-3 gap-3 pt-4 border-t border-white/15 text-left">
-              <div>
-                <p className="text-xs font-black uppercase tracking-wider opacity-75">Calories In</p>
-                <p className="text-xl sm:text-2xl font-black mt-0.5">{dailyCaloriesIn.toLocaleString()}</p>
-                <p className="text-xs font-semibold opacity-75">{dailyCarbsG}g carbs</p>
-              </div>
-              <div>
-                <p className="text-xs font-black uppercase tracking-wider opacity-75">Counted Burn</p>
-                <p className="text-xl sm:text-2xl font-black mt-0.5">{scoredCaloriesOut.toLocaleString()}</p>
-                <p className="text-xs font-semibold opacity-75">Watch: {dailyCaloriesOut.toLocaleString()}</p>
-              </div>
-              <div>
-                <p className="text-xs font-black uppercase tracking-wider opacity-75">
-                  {alpertDeficit >= 0 ? 'Net Deficit' : 'Net Surplus'}
-                </p>
-                <p className="text-xl sm:text-2xl font-black mt-0.5">
-                  {alpertDeficit >= 0 ? `-${alpertDeficit.toLocaleString()}` : `+${Math.abs(alpertDeficit).toLocaleString()}`}
-                </p>
-                <p className="text-xs font-semibold opacity-75">Cap: {alpertNumber.toLocaleString()}</p>
-              </div>
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
           </div>
 
-          {/* Inline Zero-AI Score / Day Note Drawer */}
-          {scoreLockOpen && (
-            <div className="p-4 bg-slate-900 text-white border-t border-white/10 space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-black uppercase tracking-widest text-emerald-400">
-                  Zero-AI Score & Sheet Note ({selectedDateStr})
-                </p>
-                <span className="text-xs text-slate-400">0 Gemini calls</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs font-bold uppercase text-slate-400">Fasting Hours</label>
-                  <Input
-                    type="number"
-                    value={lockFastingHours}
-                    onChange={(e) => setLockFastingHours(e.target.value)}
-                    className="h-8 text-sm bg-slate-800 border-slate-700 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold uppercase text-slate-400">Alcohol Drinks</label>
-                  <Input
-                    type="number"
-                    value={lockAlcoholDrinks}
-                    onChange={(e) => setLockAlcoholDrinks(e.target.value)}
-                    className="h-8 text-sm bg-slate-800 border-slate-700 text-white"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="text-xs font-bold uppercase text-slate-400">Day Note (Sheet Notes Column)</label>
-                <Input
-                  type="text"
-                  placeholder="e.g. Hoops + 19h fast, or Date night wine..."
-                  value={lockDayNote}
-                  onChange={(e) => setLockDayNote(e.target.value)}
-                  className="h-8 text-sm bg-slate-800 border-slate-700 text-white"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button size="sm" variant="ghost" onClick={() => setScoreLockOpen(false)} className="h-8 text-xs text-slate-300">
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleLockDayScore}
-                  disabled={isLockingScore}
-                  className="h-8 px-3.5 text-xs font-black uppercase bg-emerald-500 hover:bg-emerald-600 text-white"
+          {/* Big Standard Drink Units Display + Status Badges */}
+          <div className="mt-5 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="flex items-baseline gap-3">
+                <span
+                  className={`text-5xl sm:text-6xl font-black tracking-tight tabular-nums ${
+                    dayStats.isClear || (dayStats.totalUnits === 0 && dayStats.isZeroProofOnly)
+                      ? 'text-[#3F7D58]'
+                      : dayStats.totalUnits > 0
+                        ? 'text-[#C26D2D]'
+                        : 'text-[#1F1B18]'
+                  }`}
                 >
-                  {isLockingScore ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : null}
-                  Save to Ledger
-                </Button>
-              </div>
-            </div>
-          )}
-        </Card>
-
-        {/* Right 7 cols: Smarter 3-Signal Alpert "Should I Eat Now?" & Protein Pacing Runway */}
-        <Card className={`lg:col-span-7 border shadow-md overflow-hidden ${runwayStyles.bg}`}>
-          <CardContent className="p-5 sm:p-6 flex flex-col justify-between h-full gap-4">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2.5">
-                  <span className={`px-2.5 py-0.5 rounded text-xs font-black uppercase tracking-widest ${runwayStyles.badge}`}>
-                    {runwayStyles.label}
-                  </span>
-                  <span className="text-xs font-black uppercase tracking-wider opacity-70">
-                    Alpert & Glycogen Timing Engine
-                  </span>
-                </div>
-                <h3 className="text-xl sm:text-2xl font-black tracking-tight">
-                  {eatRunway.headline}
-                </h3>
-                <p className="text-sm sm:text-base font-medium opacity-85 leading-relaxed">
-                  {eatRunway.subline}
-                </p>
-              </div>
-            </div>
-
-            {/* 3-Signal Metrics Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* Signal 1: Direct Alpert Breach Clock + Optimal Eat-By Sweet Spot */}
-              <div className="bg-white/85 backdrop-blur-sm rounded-xl p-3.5 border border-black/5">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-black uppercase tracking-wider text-muted-foreground">
-                    1. Sweet Spot & Breach Clock
-                  </span>
-                  <Clock className="w-4 h-4 text-emerald-600" />
-                </div>
-                <p className="text-base sm:text-lg font-black text-foreground leading-snug">
-                  {eatRunway.kcalUntilAlpertBreach <= 0
-                    ? `${Math.abs(eatRunway.kcalUntilAlpertBreach).toLocaleString()} kcal OVER — Eat Now`
-                    : `Optimal Eat-By: ${eatRunway.nutritionistRx.optimalEatByTimeLabel} (~${eatRunway.nutritionistRx.hoursUntilOptimalEat}h)`}
-                </p>
-                <p className="text-xs sm:text-sm font-bold text-muted-foreground mt-1">
-                  {eatRunway.kcalUntilAlpertBreach <= 0
-                    ? `Deficit ${eatRunway.currentDeficitKcal.toLocaleString()} / ${alpertNumber.toLocaleString()} cap (~${eatRunway.hourlyBurnRateKcal} kcal/hr)`
-                    : `Hard Alpert cap: ${eatRunway.expectedBreachTimeLabel} (~${eatRunway.hoursUntilAlpertBreach}h · ${eatRunway.kcalUntilAlpertBreach.toLocaleString()} kcal left)`}
-                </p>
-                <p className="text-[11px] font-semibold text-emerald-800/80 mt-0.5">
-                  Fat faucet: {eatRunway.nutritionistRx.fatFaucetEfficiencyPct}% ({eatRunway.fatFaucetHourlyKcal} kcal/hr) · Non-fat gap: ~{eatRunway.nutritionistRx.wakingNonFatGapHourlyKcal} kcal/hr
-                </p>
-              </div>
-
-              {/* Signal 2: Rest-of-Day Alpert Calorie Floor & 100-Pt Target */}
-              <div className="bg-white/85 backdrop-blur-sm rounded-xl p-3.5 border border-black/5">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-black uppercase tracking-wider text-muted-foreground">
-                    2. Daily Calorie Plan
-                  </span>
-                  <Flame className="w-4 h-4 text-orange-600" />
-                </div>
-                <p className="text-base sm:text-lg font-black text-foreground leading-snug">
-                  {eatRunway.kcalToAlpertFloor > 0
-                    ? `Eat ≥${eatRunway.kcalToAlpertFloor.toLocaleString()} kcal before bed`
-                    : !eatRunway.safeThrough8amTomorrow
-                      ? `Eat ≥${eatRunway.kcalNeededFor8amTomorrow.toLocaleString()} kcal for 8 AM wake`
-                      : `8 AM & EOD Floor (${eatRunway.alpertFloorIntakeKcal.toLocaleString()} kcal) Hit ✓`}
-                </p>
-                <p className="text-xs sm:text-sm font-bold text-muted-foreground mt-1">
-                  100-pt target: {eatRunway.target100PtIntakeKcal.toLocaleString()} kcal (
-                  {eatRunway.kcalLeftFor100Pts >= 0
-                    ? `${eatRunway.kcalLeftFor100Pts.toLocaleString()} left`
-                    : `${Math.abs(eatRunway.kcalLeftFor100Pts).toLocaleString()} past`}
-                  )
-                </p>
-              </div>
-
-              {/* Signal 3: Protein Pacing Window */}
-              <div className="bg-white/85 backdrop-blur-sm rounded-xl p-3.5 border border-black/5">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-black uppercase tracking-wider text-muted-foreground">
-                    3. Protein Window
-                  </span>
-                  <Utensils className="w-4 h-4 text-purple-600" />
-                </div>
-                <p className="text-base sm:text-lg font-black text-foreground leading-snug">
-                  {eatRunway.proteinToGoG > 0
-                    ? `${eatRunway.proteinToGoG}g to go (${eatRunway.mealsNeededForProtein} meal${eatRunway.mealsNeededForProtein === 1 ? '' : 's'})`
-                    : `${proteinGoal}g Target Hit ✓`}
-                </p>
-                <div className="mt-2">
-                  <Progress value={proteinProgress} className="h-2 bg-purple-100" />
-                  <p className="text-xs sm:text-sm font-bold text-muted-foreground mt-1">
-                    {dailyProteinG}g / {proteinGoal}g · PSMF 40g pulse = +{eatRunway.nutritionistRx.psmfPulseGainHours}h runway
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Zero-AI 3-Day Nutritionist Rx Banner (0 LLM Tokens, Pure Physiology Math) */}
-            <div className="bg-white/90 backdrop-blur-sm rounded-xl p-3.5 border border-emerald-500/25 shadow-xs space-y-1.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5">
-                  <span className="px-2 py-0.5 rounded bg-emerald-700 text-white text-[10px] font-black uppercase tracking-wider">
-                    Zero-AI 3-Day Nutritionist
-                  </span>
-                  <span className="text-xs font-bold text-muted-foreground">
-                    {eatRunway.nutritionistRx.threeDaySummaryLabel}
-                  </span>
-                </div>
-                <span className="text-xs font-black text-emerald-800 bg-emerald-100/80 px-2.5 py-0.5 rounded-full">
-                  {eatRunway.nutritionistRx.sweetSpotWindowLabel}
+                  {isLogsLoading && selectedDayLogs.length === 0
+                    ? '—'
+                    : formatUnits(dayStats.totalUnits)}
+                </span>
+                <span className="text-sm font-semibold text-[#6E6359]">
+                  standard units
                 </span>
               </div>
-              <p className="text-xs sm:text-sm font-bold text-foreground leading-relaxed">
-                {eatRunway.nutritionistRx.recommendation}
+              <p className="text-xs text-[#6E6359]">
+                1.0u = 14g (0.6 fl oz) pure alcohol • oz × ABV% ÷ 60
               </p>
             </div>
 
-            {selectedDateStr === todayStr && (
-              <OutreachInlinePrompt variant="runway" outreach={prefs?.outreach} />
-            )}
-
-            {alpertPace && eatRunway.status === 'clear' && (
-              <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-amber-800 bg-amber-100/70 px-3.5 py-2 rounded-lg">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>
-                  Raw watch deficit is high ({alpertPace.projectedDaily.toLocaleString()} kcal proj), buffered by liver glycogen until {eatRunway.muscleBurnStartTimeLabel ?? 'evening'}.
+            <div className="flex flex-wrap items-center gap-2">
+              {dayStats.isClear && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#3F7D58] text-white px-3 py-1 text-xs font-bold shadow-xs">
+                  <Leaf className="w-3.5 h-3.5" />
+                  Clear Day (0.0u)
                 </span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ── ROW 2: Zero-AI Quick Log Bar (Recent Tickers w/ Descriptions + Today's Logged Items w/ Undo) ── */}
-      <Card className="border-none shadow-sm bg-white/80 ring-1 ring-black/5">
-        <CardContent className="p-4 sm:p-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5">
-              <span className="px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-black uppercase tracking-widest">
-                Zero-AI Quick Log
-              </span>
-              <span className="text-xs sm:text-sm font-bold text-muted-foreground">
-                Recent saved Tickers (tap card to inspect ingredients · tap <span className="text-emerald-700 font-black">+ Log</span> to add)
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              {Object.keys(prefs?.foodNicknames ?? {}).length > RECENT_TICKER_LIMIT && (
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    placeholder="Filter tickers..."
-                    value={nicknameQuery}
-                    onChange={(e) => setNicknameQuery(e.target.value)}
-                    className="h-8 pl-8 pr-7 w-40 sm:w-52 text-xs sm:text-sm"
-                  />
-                  {nicknameQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setNicknameQuery('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
               )}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setQuickFoodOpen((v) => !v)}
-                className="h-8 px-3 text-xs font-black uppercase tracking-wider"
-              >
-                <Plus className="w-3.5 h-3.5 mr-1" />
-                {quickFoodOpen ? 'Close Quick Entry' : 'Custom Food / Supplement'}
-              </Button>
+              {!dayStats.isClear && dayStats.isZeroProofOnly && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#3F7D58]/15 border border-[#3F7D58]/30 text-[#3F7D58] px-3 py-1 text-xs font-bold">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Zero-Proof Night
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#FFFDF9] border border-[#E8DFD1] px-3 py-1 text-xs font-semibold text-[#1F1B18]">
+                <Wine className="w-3.5 h-3.5 text-[#C26D2D]" />
+                {dayStats.alcoholCount} {dayStats.alcoholCount === 1 ? 'pour' : 'pours'}
+                {dayStats.zeroProofCount > 0 ? ` + ${dayStats.zeroProofCount} NA` : ''}
+              </span>
             </div>
           </div>
 
-          {/* Logged Today Strip — allows 1-tap removal or moving to Last Night */}
-          {activeTodayFoodLogs.length > 0 && (
-            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-                <span className="text-xs font-black uppercase tracking-wider text-slate-600">
-                  Logged on {isViewingToday ? 'Today' : selectedDateStr} ({activeTodayFoodLogs.length})
+          {/* 3-Stat Coaster Rhythm Strip */}
+          <div className="grid grid-cols-3 gap-2.5 mt-5">
+            <div className="rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3.5 py-2.5">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
+                7d Rolling Avg
+              </p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="text-lg font-black text-[#1F1B18] tabular-nums">
+                  {formatUnits(trendSummary.sevenDayAvg)}
                 </span>
-                <span className="text-xs font-medium text-muted-foreground">
-                  {isViewingToday ? 'Tap 🌙 Last Night to move to yesterday · ' : ''}Tap <Trash2 className="w-3 h-3 inline mx-0.5" /> to remove
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {activeTodayFoodLogs.map((entry) => {
-                  const isRemoving = removingFoodId === entry.id;
-                  const suppBadges = formatSupplementBadges(entry);
-                  return (
-                    <div
-                      key={entry.id}
-                      className="inline-flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs sm:text-sm shadow-2xs"
-                    >
-                      <span className="font-bold text-slate-800 truncate max-w-[200px] sm:max-w-[260px]">
-                        {entry.name}
-                      </span>
-                      <span className="text-slate-500 font-semibold whitespace-nowrap">
-                        {suppBadges.length > 0 && entry.calories === 0
-                          ? `${suppBadges.join(' · ')} · 0 kcal`
-                          : `${entry.calories} kcal · ${entry.proteinG}g P`}
-                      </span>
-                      {isViewingToday && (
-                        <button
-                          type="button"
-                          disabled={isRemoving}
-                          onClick={() => handleMoveFoodToLastNight(entry)}
-                          title={`Move "${entry.name}" to Last Night (${prevDateStr} 8:30 PM)`}
-                          className="px-1.5 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] uppercase tracking-wider transition-colors"
-                        >
-                          🌙 Last Night
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={isRemoving}
-                        onClick={() => handleRemoveFoodEntry(entry)}
-                        title={`Remove ${entry.name}`}
-                        className="ml-0.5 p-1 rounded hover:bg-red-50 text-slate-400 hover:text-red-600 transition-colors"
-                      >
-                        {isRemoving ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  );
-                })}
+                {trendSummary.rollingVsPriorPct !== null && (
+                  <span
+                    className={`inline-flex items-center text-[11px] font-bold tabular-nums ${
+                      trendSummary.rollingVsPriorPct <= 0
+                        ? 'text-[#3F7D58]'
+                        : 'text-[#C26D2D]'
+                    }`}
+                  >
+                    {trendSummary.rollingVsPriorPct <= 0 ? (
+                      <TrendingDown className="w-3 h-3 mr-0.5" />
+                    ) : (
+                      <TrendingUp className="w-3 h-3 mr-0.5" />
+                    )}
+                    {trendSummary.rollingVsPriorPct > 0 ? '+' : ''}
+                    {trendSummary.rollingVsPriorPct}%
+                  </span>
+                )}
               </div>
             </div>
-          )}
 
-          {/* Top 8 Most Recent Tickers with Descriptions & Explicit + Log Button */}
-          {visibleNicknames.length > 0 && (
-            <div className="space-y-2.5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-                {visibleNicknames.map(({ key, nick }) => {
-                  const isPreviewing = previewNickKey === key;
-                  return (
-                    <div
-                      key={key}
-                      onClick={() => setPreviewNickKey(isPreviewing ? null : key)}
-                      className={`rounded-xl border p-3 transition-all cursor-pointer flex flex-col justify-between gap-2 ${
-                        isPreviewing
-                          ? 'bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-200'
-                          : 'bg-slate-50/70 hover:bg-slate-100/80 border-slate-200/80'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                            <p className="text-sm font-black text-foreground truncate">
-                              {nick.nickname || key}
-                            </p>
-                          </div>
-                          {nick.description && (
-                            <p className="text-xs font-medium text-muted-foreground line-clamp-2 mt-1 leading-snug">
-                              {nick.description}
-                            </p>
-                          )}
-                        </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          disabled={isLoggingQuick}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleQuickLogNickname(key, nick);
-                          }}
-                          className="h-7 px-2.5 text-xs font-black uppercase bg-emerald-600 hover:bg-emerald-700 text-white shrink-0 rounded-md"
-                        >
-                          + Log
-                        </Button>
-                      </div>
+            <div className="rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3.5 py-2.5">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
+                Clear Days (30d)
+              </p>
+              <p className="text-lg font-black text-[#3F7D58] tabular-nums mt-0.5">
+                {trendSummary.clearDaysLast30}{' '}
+                <span className="text-xs font-semibold text-[#6E6359]">days</span>
+              </p>
+            </div>
 
-                      <div className="flex items-center justify-between text-xs font-bold pt-1.5 border-t border-black/5">
-                        <span className="text-slate-700">
-                          {nick.totalCalories} kcal · <span className="text-emerald-700">{nick.totalProteinG}g P</span>
-                        </span>
-                        <span className="text-xs uppercase text-muted-foreground">
-                          {nick.totalCarbsG || 0}C · {nick.totalFatG || 0}F
-                        </span>
-                      </div>
+            <div className="rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3.5 py-2.5">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
+                30d Total
+              </p>
+              <p className="text-lg font-black text-[#C26D2D] tabular-nums mt-0.5">
+                {formatUnits(trendSummary.thirtyDayTotal)}
+              </p>
+            </div>
+          </div>
+        </CardHeader>
 
-                      {isPreviewing && nick.items && nick.items.length > 0 && (
-                        <div className="pt-2 border-t border-emerald-200/60 flex flex-wrap gap-1.5">
-                          {nick.items.map((item, idx) => (
-                            <span
-                              key={idx}
-                              className="px-2 py-0.5 rounded bg-white text-xs font-medium text-slate-700 border border-emerald-200"
-                            >
-                              {item}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {sortedNicknames.length > RECENT_TICKER_LIMIT && !nicknameQuery.trim() && (
-                <div className="flex justify-center pt-1">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowAllNicknames((v) => !v)}
-                    className="h-7 px-3 text-xs font-black uppercase tracking-wider text-muted-foreground hover:text-foreground"
-                  >
-                    {showAllNicknames ? (
-                      <>
-                        <ChevronUp className="w-3.5 h-3.5 mr-1" /> Show Top {RECENT_TICKER_LIMIT} Most Recent
-                      </>
-                    ) : (
-                      <>
-                        <ChevronDown className="w-3.5 h-3.5 mr-1" /> Show All {sortedNicknames.length} Saved Tickers
-                      </>
-                    )}
-                  </Button>
-                </div>
+        <CardContent className="p-5 space-y-6">
+          {/* 1-Tap Preset Pour Strip */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-[#6E6359]">
+                1-Tap Preset Pours
+              </h3>
+              {preferredFlavors.length > 0 && (
+                <span className="text-[11px] font-medium text-[#3F7D58]">
+                  Swaps tuned to {preferredFlavors[0]}
+                </span>
               )}
             </div>
-          )}
 
-          {quickFoodOpen && (
-            <form onSubmit={handleQuickCustomFoodSubmit} className="grid grid-cols-2 sm:grid-cols-6 gap-2 pt-2 border-t">
-              <Input
-                placeholder="Food or supplement (e.g. Sardines, Creatine 5g, Beta-Alanine 4g)"
-                value={quickItemName}
-                onChange={(e) => setQuickItemName(e.target.value)}
-                className="h-9 text-sm sm:col-span-2"
-                required
-              />
-              <Input
-                type="number"
-                placeholder="Calories (0 for supps)"
-                value={quickCalories}
-                onChange={(e) => setQuickCalories(e.target.value)}
-                className="h-9 text-sm"
-              />
-              <Input
-                type="number"
-                placeholder="Protein (g)"
-                value={quickProtein}
-                onChange={(e) => setQuickProtein(e.target.value)}
-                className="h-9 text-sm"
-              />
-              <select
-                value={quickMeal}
-                onChange={(e) => setQuickMeal(e.target.value as any)}
-                className="h-9 rounded-md border border-input bg-background px-2 text-sm font-medium"
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {DRINK_PRESETS.map((preset) => {
+                const isSage = Boolean(preset.clearDay || preset.zeroProof);
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    disabled={isLogging || isLoading}
+                    onClick={() => handlePresetTap(preset)}
+                    className={`group rounded-2xl border px-3 py-2.5 text-left transition-all cursor-pointer active:scale-[0.98] disabled:opacity-50 ${
+                      isSage
+                        ? 'bg-[#3F7D58]/8 border-[#3F7D58]/25 hover:bg-[#3F7D58]/14 hover:border-[#3F7D58]'
+                        : 'bg-[#FAF6F0] border-[#E8DFD1] hover:bg-[#F5EBDC] hover:border-[#C26D2D]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[#1F1B18] truncate">
+                        {renderPresetIcon(preset)}
+                        <span className="truncate">{preset.shortLabel}</span>
+                      </span>
+                      <span
+                        className={`text-xs font-black tabular-nums shrink-0 ${
+                          isSage ? 'text-[#3F7D58]' : 'text-[#C26D2D]'
+                        }`}
+                      >
+                        {formatUnits(preset.units)}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#6E6359] mt-0.5 truncate">
+                      {preset.clearDay
+                        ? 'Record intentional 0.0u day'
+                        : `${preset.volumeOz} oz • ${preset.abvPct}% ABV`}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Interactive Quick Unit Calculator */}
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-4 space-y-3.5">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setCalcExpanded((prev) => !prev)}
+                className="flex items-center gap-2 text-left"
               >
-                <option value="breakfast">Breakfast</option>
-                <option value="lunch">Lunch</option>
-                <option value="dinner">Dinner</option>
-                <option value="snack">Snack</option>
-              </select>
-              <Button type="submit" size="sm" disabled={isLoggingQuick} className="h-9 text-xs font-black uppercase">
-                {isLoggingQuick ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
-                Log Item
-              </Button>
-            </form>
-          )}
+                <SlidersHorizontal className="w-4 h-4 text-[#C26D2D]" />
+                <span className="text-sm font-bold text-[#1F1B18]">
+                  Quick Unit Calculator
+                </span>
+              </button>
+
+              <div className="inline-flex rounded-full bg-[#FFFDF9] border border-[#E8DFD1] p-0.5">
+                {(['oz', 'ml'] as const).map((unit) => (
+                  <button
+                    key={unit}
+                    type="button"
+                    onClick={() => handleToggleVolumeUnit(unit)}
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase transition-colors ${
+                      volumeUnit === unit
+                        ? 'bg-[#1F1B18] text-[#FAF6F0]'
+                        : 'text-[#6E6359] hover:text-[#1F1B18]'
+                    }`}
+                  >
+                    {unit}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {calcExpanded && (
+              <div className="space-y-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                  <div className="sm:col-span-5 space-y-1">
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#6E6359]">
+                      Drink Name (optional)
+                    </label>
+                    <Input
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      placeholder="e.g. Hazy IPA, Pinot Noir, Negroni"
+                      className="h-9 bg-[#FFFDF9] border-[#E8DFD1] text-sm"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-3 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-bold uppercase tracking-wider text-[#6E6359]">
+                        Volume ({volumeUnit})
+                      </label>
+                      {volumeUnit === 'ml' && (
+                        <span className="text-[10px] text-[#6E6359] tabular-nums">
+                          {Math.round(effectiveOz * 10) / 10} oz
+                        </span>
+                      )}
+                    </div>
+                    <Input
+                      type="number"
+                      min="0.5"
+                      step={volumeUnit === 'oz' ? '0.5' : '15'}
+                      value={volumeInput}
+                      onChange={(e) => setVolumeInput(e.target.value)}
+                      className="h-9 bg-[#FFFDF9] border-[#E8DFD1] text-sm tabular-nums"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#6E6359]">
+                      ABV %
+                    </label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max="95"
+                      step="0.1"
+                      value={abvInput}
+                      onChange={(e) => setAbvInput(e.target.value)}
+                      className="h-9 bg-[#FFFDF9] border-[#E8DFD1] text-sm tabular-nums"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2 flex items-center justify-between sm:justify-end gap-2 bg-[#FFFDF9] border border-[#E8DFD1] rounded-xl px-3 h-9">
+                    <span className="text-[10px] uppercase font-bold text-[#6E6359] sm:hidden">
+                      Preview
+                    </span>
+                    <span
+                      className={`text-base font-black tabular-nums ${
+                        effectiveAbv === 0 ? 'text-[#3F7D58]' : 'text-[#C26D2D]'
+                      }`}
+                    >
+                      {formatUnits(liveCalculatorUnits)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Tactile Volume + ABV Sliders */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[11px] text-[#6E6359]">
+                      <span>Pour size</span>
+                      <span className="font-semibold text-[#1F1B18] tabular-nums">
+                        {volumeInput || 0} {volumeUnit}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={volumeUnit === 'oz' ? 1 : 30}
+                      max={volumeUnit === 'oz' ? 24 : 750}
+                      step={volumeUnit === 'oz' ? 0.5 : 15}
+                      value={parseFloat(volumeInput) || (volumeUnit === 'oz' ? 12 : 355)}
+                      onChange={(e) => setVolumeInput(e.target.value)}
+                      className="w-full accent-[#C26D2D] cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-[11px] text-[#6E6359]">
+                      <span>Strength (ABV)</span>
+                      <span className="font-semibold text-[#1F1B18] tabular-nums">
+                        {effectiveAbv}% ABV
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={50}
+                      step={0.5}
+                      value={effectiveAbv}
+                      onChange={(e) => setAbvInput(e.target.value)}
+                      className="w-full accent-[#C26D2D] cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { label: '12oz 5%', vol: 12, abv: 5 },
+                      { label: '16oz 7%', vol: 16, abv: 7 },
+                      { label: '5oz 12%', vol: 5, abv: 12 },
+                      { label: '1.5oz 40%', vol: 1.5, abv: 40 },
+                    ].map((quick) => (
+                      <button
+                        key={quick.label}
+                        type="button"
+                        onClick={() => {
+                          setVolumeUnit('oz');
+                          setVolumeInput(String(quick.vol));
+                          setAbvInput(String(quick.abv));
+                        }}
+                        className="px-2 py-1 rounded-lg bg-[#FFFDF9] border border-[#E8DFD1] hover:border-[#C26D2D] text-[11px] font-semibold text-[#6E6359] hover:text-[#1F1B18]"
+                      >
+                        {quick.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={isLogging || effectiveOz <= 0}
+                    onClick={handleCustomLog}
+                    className="bg-[#1F1B18] hover:bg-[#352F2A] text-[#FAF6F0] rounded-full px-4 font-bold text-xs"
+                  >
+                    <Plus className="w-3.5 h-3.5 mr-1.5" />
+                    Log This Pour ({formatUnits(liveCalculatorUnits)})
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Selected Day Logged Pours List */}
+          <div className="space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-[#6E6359]">
+                On This Coaster ({selectedDayLogs.length})
+              </h3>
+              <div className="flex items-center gap-2">
+                {selectedDayLogs.length > 0 && (
+                  <ShareMealButton
+                    foodLogIds={selectedDayLogs.map((l) => l.id)}
+                    label="Share round"
+                    mealName={formatDateHeading(selectedDateStr, todayKey)}
+                  />
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setDaySheetOpen(true)}
+                  className="h-7 px-2.5 text-xs border-[#E8DFD1] text-[#1F1B18] bg-[#FFFDF9]"
+                >
+                  Edit pours
+                </Button>
+              </div>
+            </div>
+
+            {selectedDayLogs.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-[#E8DFD1] bg-[#FAF6F0]/60 p-4 text-center text-xs text-[#6E6359]">
+                No pours logged yet for {selectedDateStr}. Tap any preset above to start your coaster.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {selectedDayLogs.map((item) => {
+                  const units = getEntryUnits(item);
+                  const isClear = isClearDayEntry(item);
+                  const isZP = isZeroProofEntry(item);
+                  return (
+                    <div
+                      key={item.id}
+                      className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] px-3.5 py-2.5 flex items-center justify-between gap-3"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-bold text-[#1F1B18] truncate">
+                            {item.name}
+                          </span>
+                          {isClear && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#3F7D58]/15 text-[#3F7D58]">
+                              Clear Day
+                            </span>
+                          )}
+                          {isZP && !isClear && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#3F7D58]/15 text-[#3F7D58]">
+                              Zero-Proof
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-[#6E6359] mt-0.5">
+                          {item.consumedAt ? formatHHMM12h(item.consumedAt) : 'Logged'}
+                          {typeof item.volumeOz === 'number' && item.volumeOz > 0
+                            ? ` • ${item.volumeOz} oz`
+                            : ''}
+                          {typeof item.abvPct === 'number' && !isClear
+                            ? ` • ${item.abvPct}% ABV`
+                            : ''}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`text-sm font-black tabular-nums mr-1 ${
+                            isClear || isZP || units === 0
+                              ? 'text-[#3F7D58]'
+                              : 'text-[#C26D2D]'
+                          }`}
+                        >
+                          {formatUnits(units)}
+                        </span>
+                        {selectedDateStr === todayKey && (
+                          <button
+                            type="button"
+                            onClick={() => handleMoveToPreviousDay(item)}
+                            title="Move to yesterday"
+                            className="px-2 py-1 rounded-lg text-[10px] font-semibold text-[#6E6359] hover:text-[#1F1B18] hover:bg-[#FFFDF9] border border-transparent hover:border-[#E8DFD1]"
+                          >
+                            Last night?
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteEntry(item)}
+                          aria-label={`Delete ${item.name}`}
+                          className="p-1.5 rounded-lg text-[#6E6359] hover:text-[#C26D2D] hover:bg-[#FFFDF9]"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Sunny's Booth-Buddy Note & Swap Corner */}
+          <div className="rounded-2xl bg-gradient-to-br from-[#FBF5EC] to-[#F3EADF] border border-[#E8DFD1] p-4 space-y-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="w-7 h-7 rounded-full bg-[#C26D2D]/15 border border-[#C26D2D]/30 flex items-center justify-center text-[#C26D2D]">
+                  <Sparkles className="w-3.5 h-3.5" />
+                </span>
+                <div>
+                  <p className="text-xs font-black uppercase tracking-wider text-[#C26D2D]">
+                    Sunny&apos;s Swap Corner
+                  </p>
+                  <p className="text-sm font-bold text-[#1F1B18]">{sunnyCard.title}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSunnyIndex((prev) => (prev + 1) % SUNNY_SWAP_CORNER.length)
+                  }
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#FFFDF9] border border-[#E8DFD1] hover:border-[#C26D2D] text-[11px] font-semibold text-[#6E6359] hover:text-[#1F1B18]"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Next idea
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEarningsModalOpen(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#1F1B18] text-[#FAF6F0] text-[11px] font-bold hover:bg-[#352F2A]"
+                >
+                  Sunny Check-In
+                </button>
+              </div>
+            </div>
+
+            <p className="text-xs font-semibold text-[#3F7D58]">
+              Good fit: {sunnyCard.pairing}
+            </p>
+            <p className="text-xs text-[#1F1B18]/90 leading-relaxed">{sunnyCard.note}</p>
+            <p className="text-[11px] text-[#6E6359] italic pt-1 border-t border-[#E8DFD1]/80">
+              {sunnyCard.trivia}
+            </p>
+          </div>
         </CardContent>
       </Card>
 
-      {/* ── ROW 3: Flexible Level / Sprint Tracker (Replaces Google Sheet Right-Side Blocks) ── */}
-      {showVfScore && (
-        <Card className="border-none shadow-xl overflow-hidden bg-slate-900 text-white">
-          <CardContent className="p-5 sm:p-7 space-y-5">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="flex items-center gap-3.5">
-                <div className="p-3 bg-emerald-500/20 rounded-2xl border border-emerald-500/30">
-                  <Trophy className="w-6 h-6 text-emerald-400" />
-                </div>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-black uppercase tracking-[0.2em] text-emerald-400">
-                      Active Level Sprint
-                    </span>
-                    <span className="px-2 py-0.5 rounded bg-white/10 text-xs font-bold text-slate-300">
-                      Since {activeLevel.startDate}
-                    </span>
-                    {activeLevel.engineEra && (
-                      <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-xs font-bold text-emerald-300">
-                        {activeLevel.engineEra}
-                      </span>
-                    )}
-                  </div>
-                  <h3 className="text-2xl sm:text-3xl font-black italic tracking-tight mt-0.5">
-                    {activeLevel.name}
-                  </h3>
-                  {activeLevel.notes && (
-                    <p className="text-sm text-slate-400 mt-0.5">{activeLevel.notes}</p>
-                  )}
-                </div>
-              </div>
+      {/* Companion Check-In Prompt & Local AI Terminal */}
+      <OutreachInlinePrompt variant="idle" />
+      <HybridTickerTerminal healthData={data} targetDateIso={selectedDateStr} />
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => openLevelEditor(activeLevel)}
-                  className="h-8 px-3 text-xs font-black uppercase tracking-wider bg-white/10 hover:bg-white/20 text-white border-none"
-                >
-                  <Settings2 className="w-3.5 h-3.5 mr-1.5" />
-                  Edit / New Level
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setPastLevelsOpen((v) => !v)}
-                  className="h-8 px-3 text-xs font-black uppercase tracking-wider bg-white/10 hover:bg-white/20 text-white border-none"
-                >
-                  <History className="w-3.5 h-3.5 mr-1.5" />
-                  Sheet Levels ({levelHistory.length})
-                </Button>
-              </div>
-            </div>
-
-            {/* Google Sheet Columns: Total Points | Points per Day | Target | Points to Target | Days to Target | Fin Date */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
-                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Total Points</p>
-                <p className="text-2xl sm:text-3xl font-black italic text-emerald-400 mt-0.5">
-                  {levelProgress.totalPoints.toLocaleString()}
-                </p>
-                <p className="text-xs font-bold text-slate-400 mt-0.5">
-                  {levelProgress.daysScored} day{levelProgress.daysScored === 1 ? '' : 's'} scored
-                </p>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
-                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Points per Day</p>
-                <p className="text-2xl sm:text-3xl font-black italic text-white mt-0.5">
-                  {levelProgress.pointsPerDay}
-                </p>
-                <p className="text-xs font-bold text-slate-400 mt-0.5">
-                  7d pace: {levelProgress.rolling7dPointsPerDay}/d
-                </p>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
-                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Target</p>
-                <p className="text-2xl sm:text-3xl font-black italic text-white mt-0.5">
-                  {levelProgress.targetPoints.toLocaleString()}
-                </p>
-                <p className="text-xs font-bold text-slate-400 mt-0.5">
-                  {levelProgress.progressPct}% complete
-                </p>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
-                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Points to Target</p>
-                <p className={`text-2xl sm:text-3xl font-black italic mt-0.5 ${levelProgress.pointsToTarget <= 0 ? 'text-emerald-400' : 'text-amber-300'}`}>
-                  {levelProgress.pointsToTarget.toLocaleString()}
-                </p>
-                <p className="text-xs font-bold text-slate-400 mt-0.5">
-                  {levelProgress.pointsToTarget <= 0 ? 'Target beaten ✓' : 'Remaining'}
-                </p>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
-                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Days to Target</p>
-                <p className="text-2xl sm:text-3xl font-black italic text-white mt-0.5">
-                  {levelProgress.daysToTarget !== null ? `${levelProgress.daysToTarget}d` : '—'}
-                </p>
-                <p className="text-xs font-bold text-slate-400 mt-0.5">
-                  {levelProgress.requiredPointsPerDay !== null
-                    ? `Req: ${levelProgress.requiredPointsPerDay} pts/d`
-                    : 'At current pace'}
-                </p>
-              </div>
-
-              <div className="bg-white/5 rounded-xl p-3.5 border border-white/10">
-                <p className="text-xs font-black uppercase tracking-wider text-slate-400">Fin Date</p>
-                <p className="text-xl sm:text-2xl font-black italic text-emerald-300 mt-1">
-                  {levelProgress.projectedFinishDate ?? '—'}
-                </p>
-                <p className="text-xs font-bold text-slate-400 mt-0.5">
-                  All-Time: {visceralFatPoints.toLocaleString()} pts
-                </p>
-              </div>
-            </div>
-
-            <Progress value={Math.min(100, levelProgress.progressPct)} className="h-2 bg-white/10" />
-
-            {/* Inline Level Editor & Preset Switcher */}
-            {levelEditorOpen && (
-              <div className="p-4 rounded-xl bg-slate-800/90 border border-white/10 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs font-black uppercase tracking-wider text-emerald-400">
-                    Configure Active Level or Start Fresh Sprint
-                  </p>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[10px] font-bold text-slate-400 mr-1">Quick Presets:</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        handleSwitchPresetLevel({
-                          id: 'level-3-thanksgiving-2026',
-                          name: 'Level 3 (Thanksgiving 500)',
-                          startDate: '2026-09-22',
-                          targetPoints: 500,
-                          targetDate: '2026-11-26',
-                          status: 'active',
-                          engineEra: 'v3.2 Taylor–Joule',
-                          notes: '500 points by Thanksgiving (started Sep 22)',
-                        })
-                      }
-                      className="h-6 px-2 text-[9px] font-black uppercase bg-emerald-700 border-emerald-500 text-white hover:bg-emerald-600"
-                    >
-                      Sep 22 → Thanksgiving (500 pts)
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        handleSwitchPresetLevel({
-                          id: 'level-3-lock-in-2026',
-                          name: 'Level 3 - Lock-In (v3.2)',
-                          startDate: '2026-10-18',
-                          targetPoints: 1000,
-                          status: 'active',
-                          engineEra: 'v3.2 Taylor–Joule',
-                          notes: 'Fresh lock-in block starting Oct 18',
-                        })
-                      }
-                      className="h-6 px-2 text-[9px] font-black uppercase bg-slate-700 border-slate-600 text-white hover:bg-slate-600"
-                    >
-                      Oct 18 Lock-In (1,000 pts)
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        handleSwitchPresetLevel({
-                          id: 'level-3-2026-cont',
-                          name: 'Level 3 (Continued)',
-                          startDate: '2026-07-20',
-                          targetPoints: 2000,
-                          status: 'active',
-                          engineEra: 'v3.1 / v3.2',
-                          notes: 'Continuing Level 3 from 7/20 toward 2,000 pts',
-                        })
-                      }
-                      className="h-6 px-2 text-[9px] font-black uppercase bg-slate-700 border-slate-600 text-white hover:bg-slate-600"
-                    >
-                      Continue Level 3 (7/20 · 2,000 pts)
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        handleSwitchPresetLevel({
-                          id: 'level-3-retry-2026',
-                          name: 'Level 3 - Retry',
-                          startDate: '2026-10-11',
-                          targetPoints: 500,
-                          status: 'active',
-                          engineEra: 'v3.1 / v3.2',
-                          notes: '500-pt sprint from 10/11',
-                        })
-                      }
-                      className="h-6 px-2 text-[9px] font-black uppercase bg-slate-700 border-slate-600 text-white hover:bg-slate-600"
-                    >
-                      Level 3 Retry (10/11 · 500 pts)
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-                  <div className="sm:col-span-2">
-                    <label className="text-[10px] font-bold uppercase text-slate-400">Level Name</label>
-                    <Input
-                      value={editLevelName}
-                      onChange={(e) => setEditLevelName(e.target.value)}
-                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400">Start Date</label>
-                    <Input
-                      type="date"
-                      value={editLevelStart}
-                      onChange={(e) => setEditLevelStart(e.target.value)}
-                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400">Target Points</label>
-                    <Input
-                      type="number"
-                      value={editLevelTarget}
-                      onChange={(e) => setEditLevelTarget(e.target.value)}
-                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400">Target Date (Opt)</label>
-                    <Input
-                      type="date"
-                      value={editLevelDeadline}
-                      onChange={(e) => setEditLevelDeadline(e.target.value)}
-                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="sm:col-span-2">
-                    <label className="text-[10px] font-bold uppercase text-slate-400">Notes</label>
-                    <Input
-                      value={editLevelNotes}
-                      onChange={(e) => setEditLevelNotes(e.target.value)}
-                      placeholder="Optional sprint focus..."
-                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold uppercase text-slate-400">Carryover Offset Pts</label>
-                    <Input
-                      type="number"
-                      value={editLevelOffset}
-                      onChange={(e) => setEditLevelOffset(e.target.value)}
-                      className="h-8 text-xs bg-slate-900 border-slate-700 text-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
-                  <Button size="sm" variant="ghost" onClick={() => setLevelEditorOpen(false)} className="h-8 text-xs text-slate-300">
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleArchiveAndStartNewLevel()}
-                    className="h-8 text-xs font-black uppercase bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30"
-                  >
-                    Archive Current & Start New Today
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={handleSaveActiveLevel}
-                    className="h-8 text-xs font-black uppercase bg-emerald-500 hover:bg-emerald-600 text-white"
-                  >
-                    Save Level Settings
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* Archived Google Sheet Levels Table */}
-            {pastLevelsOpen && (
-              <div className="p-4 rounded-xl bg-slate-800/80 border border-white/10 space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-black uppercase tracking-wider text-slate-300">
-                    2026 Level History (Imported from Google Sheet)
-                  </p>
-                  <span className="text-[10px] text-slate-400">Click any level to make it active</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-white/10 text-[9px] font-black uppercase text-slate-400">
-                        <th className="py-2 pr-3">Level</th>
-                        <th className="py-2 pr-3">Dates</th>
-                        <th className="py-2 pr-3">Total Pts</th>
-                        <th className="py-2 pr-3">Target</th>
-                        <th className="py-2 pr-3">Pts/Day</th>
-                        <th className="py-2 pr-3">Engine Vintage</th>
-                        <th className="py-2 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                      {levelHistory.map((lvl) => {
-                        const p = computeLevelProgress(lvl, data.history ?? [], { todayIso: todayStr });
-                        return (
-                          <tr key={lvl.id} className="hover:bg-white/5">
-                            <td className="py-2 pr-3 font-black text-white">{lvl.name}</td>
-                            <td className="py-2 pr-3 text-slate-300">
-                              {lvl.startDate} → {lvl.endDate ?? 'Present'}
-                            </td>
-                            <td className={`py-2 pr-3 font-black ${p.totalPoints >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                              {p.totalPoints.toLocaleString()}
-                            </td>
-                            <td className="py-2 pr-3 text-slate-300">{lvl.targetPoints.toLocaleString()}</td>
-                            <td className="py-2 pr-3 text-slate-300">{p.pointsPerDay}/d</td>
-                            <td className="py-2 pr-3">
-                              <span className="px-1.5 py-0.5 rounded bg-white/10 text-[9px] font-bold text-slate-300">
-                                {lvl.engineEra ?? 'v2.0'}
-                              </span>
-                            </td>
-                            <td className="py-2 text-right">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleSwitchPresetLevel(lvl)}
-                                className="h-6 px-2 text-[9px] font-black uppercase text-emerald-400 hover:text-emerald-300"
-                              >
-                                Activate
-                              </Button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── ROW 4: Compact Vitals Strip (Steps, Recovery, Weight, MPS, + Optional Plant Matter) ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Card className="border-none shadow-sm bg-white/80 ring-1 ring-black/5">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-muted-foreground uppercase tracking-wider">Steps</p>
-              <h4 className="text-2xl font-black italic mt-0.5">
-                {isViewingToday
-                  ? (data.steps || 0).toLocaleString()
-                  : fitbitForDate?.steps != null ? fitbitForDate.steps.toLocaleString() : 'N/A'}
-              </h4>
-            </div>
-            <div className="p-2.5 bg-orange-100 rounded-xl">
-              <Zap className="w-5 h-5 text-orange-600" />
-            </div>
-          </CardContent>
-        </Card>
-
-        {showRecovery && (
-          <Card className="border-none shadow-sm bg-white/80 ring-1 ring-black/5">
-            <CardContent className="p-4 flex items-center justify-between">
-              <div>
-                <p className="text-[10px] font-black text-muted-foreground uppercase tracking-wider">
-                  Recovery ({isViewingToday ? (data.hrv > 0 ? `${data.hrv}ms` : '—') : (fitbitForDate?.hrv ? `${fitbitForDate.hrv}ms` : '—')})
-                </p>
-                <h4 className="text-2xl font-black italic uppercase mt-0.5">
-                  {isViewingToday
-                    ? (data.hrv > 0 ? (data.recoveryStatus || 'MEDIUM') : 'N/A')
-                    : (fitbitForDate?.recoveryStatus?.toUpperCase() ?? 'N/A')}
-                </h4>
-              </div>
-              <div className="p-2.5 bg-blue-100 rounded-xl">
-                <Target className="w-5 h-5 text-blue-600" />
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        <Card className="border-none shadow-sm bg-white/80 ring-1 ring-black/5">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-muted-foreground uppercase tracking-wider">Weight</p>
-              <h4 className="text-2xl font-black italic mt-0.5">
-                {data.weightKg ? `${data.weightKg}kg` : 'N/A'}
-              </h4>
-            </div>
-            <div className="p-2.5 bg-emerald-100 rounded-xl">
-              <Scale className="w-5 h-5 text-emerald-600" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-none shadow-sm bg-white/80 ring-1 ring-black/5">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-muted-foreground uppercase tracking-wider">Anabolic MPS</p>
-              <h4 className="text-2xl font-black italic mt-0.5">
-                {simulationResult
-                  ? `${Math.round(simulationResult.slots[nowSlot || simulationResult.slots.length - 1].anabolicSignal * 100)}%`
-                  : 'N/A'}
-              </h4>
-            </div>
-            <div className="p-2.5 bg-red-100 rounded-xl">
-              <Activity className="w-5 h-5 text-red-600" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {showPlantMatter && (
-        <Card className="border-none shadow-sm bg-white/80 ring-1 ring-black/5">
-          <CardContent className="p-4 flex items-center gap-4">
-            <div className="p-3 bg-green-100 rounded-xl shrink-0">
-              <Activity className="w-5 h-5 text-green-700" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex justify-between items-end mb-1">
-                <p className="text-xs font-black text-foreground uppercase">Plant Matter (Starrett 800g)</p>
-                <span className="text-xs font-black text-muted-foreground">{Math.round(dailyPlantG)}g / {plantGoalG}g</span>
-              </div>
-              <Progress value={plantProgress} className="h-2 bg-green-50" />
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── ROW 5: Collapsible Deep-Dive Metabolic Charts (Collapsed by default to declutter) ── */}
-      {showAdvancedMetabolic && (
-        <div className="space-y-3">
-          <Button
-            variant="outline"
-            onClick={() => setChartsExpanded((v) => !v)}
-            className="w-full justify-between h-10 px-4 text-xs font-black uppercase tracking-widest bg-white/70 hover:bg-white"
-          >
-            <span>Deep-Dive Metabolic Charts (15-Min Glycogen, Fat Faucet & Lab)</span>
-            {chartsExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </Button>
-          {chartsExpanded && (
-            <DashboardCharts
-              caloriesIn={dailyCaloriesIn}
-              caloriesOut={scoredCaloriesOut}
-              deviceCaloriesOut={dailyCaloriesOut}
-              carbsG={dailyCarbsG}
-              foodLogs={todayFoodLogs ?? undefined}
-              exerciseLogs={todayExerciseLogs ?? undefined}
-              morningGlycogenPct={morningGlycogenPct}
-              weightKg={data.weightKg}
-              bodyFatPct={data.bodyFatPct}
-              isDeviceVerified={data.isDeviceVerified}
-              connectedDevice={data.connectedDevice}
-              isViewingToday={isViewingToday}
-              alpertNumber={alpertNumber}
-              fitbitActivities={fitbitActivities}
-              hrv={isViewingToday ? data.hrv : fitbitForDate?.hrv}
-              hasCreatine={prefs?.profile?.hasCreatine}
-            />
-          )}
-        </div>
-      )}
+      {/* Detailed Sheet for Selected Date */}
+      <VfDayDetail
+        entry={selectedDayEntry}
+        dateKey={selectedDateStr}
+        open={daySheetOpen}
+        onOpenChange={setDaySheetOpen}
+      />
     </div>
   );
 }

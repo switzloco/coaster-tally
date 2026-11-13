@@ -1,413 +1,412 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'next/navigation';
-import { Suspense } from 'react';
-import { Loader2, CheckCircle2, AlertCircle, Share2, Briefcase, ArrowLeft, FileText, Zap, Activity, Target, ChevronDown, ChevronUp } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { useUser } from '@/firebase';
-import { getAuth } from 'firebase/auth';
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { useUser, useFirestore } from '@/firebase';
+import { healthService } from '@/lib/health-service';
+import { FoodLogEntry } from '@/lib/food-exercise-types';
+import { calculateStandardUnits, formatUnits } from '@/lib/drink-units';
+import { useToast } from '@/hooks/use-toast';
+import {
+  ArrowLeft,
+  Check,
+  ImagePlus,
+  Loader2,
+  Plus,
+  Share2,
+  Sparkles,
+  Wine,
+} from 'lucide-react';
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-interface ParsedData {
-  domain: string;
-  category: string;
-  summary: string;
-  totalAttempts?: number;
-  totalMakes?: number;
-  totalMisses?: number;
-  shootingPct?: number;
-  caloriesBurned?: number;
-  durationMin?: number;
-  avgHeartRate?: number;
-  steps?: number;
-  distanceKm?: number;
+interface IngestParsedResult {
+  drinkName?: string;
   activityName?: string;
+  summary?: string;
+  standardUnits?: number;
+  volumeOz?: number;
+  abvPct?: number;
+  isZeroProof?: boolean;
+  isClearDay?: boolean;
+  category?: string;
   notes?: string;
-  drillBreakdown?: Array<{
-    drillName: string;
-    attempts?: number;
-    makes?: number;
-    pct?: number;
-  }>;
 }
 
-interface IngestResult {
-  success: boolean;
-  documentId?: string;
-  parsed?: ParsedData;
-  error?: string;
+function getLocalDateStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-type IngestStatus = 'idle' | 'loading' | 'success' | 'error' | 'no-data' | 'not-authenticated';
-
-// ─── Domain badge styling ───────────────────────────────────────────────────
-
-function getDomainStyle(domain: string) {
-  switch (domain) {
-    case 'performance':
-      return { bg: 'bg-amber-500/10', text: 'text-amber-600', border: 'border-amber-500/20', icon: Target, label: 'Performance' };
-    case 'metabolic':
-      return { bg: 'bg-emerald-500/10', text: 'text-emerald-600', border: 'border-emerald-500/20', icon: Activity, label: 'Metabolic' };
-    case 'mixed':
-      return { bg: 'bg-blue-500/10', text: 'text-blue-600', border: 'border-blue-500/20', icon: Zap, label: 'Mixed' };
-    default:
-      return { bg: 'bg-zinc-500/10', text: 'text-zinc-500', border: 'border-zinc-500/20', icon: FileText, label: 'Unknown' };
-  }
+function getLocalTimeStr(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-// ─── Inner component that reads search params ───────────────────────────────
-
-function IncomingShareInner() {
+function IncomingShareContent() {
   const searchParams = useSearchParams();
-  const { user, isUserLoading } = useUser();
+  const { user } = useUser();
+  const db = useFirestore();
+  const { toast } = useToast();
 
-  const [status, setStatus] = useState<IngestStatus>('idle');
-  const [result, setResult] = useState<IngestResult | null>(null);
-  const [rawText, setRawText] = useState('');
-  const [showRaw, setShowRaw] = useState(false);
+  const initialTitle = searchParams.get('title') || '';
+  const initialText = searchParams.get('text') || '';
+  const initialUrl = searchParams.get('url') || '';
+  const initialImageUrl = searchParams.get('image') || searchParams.get('imageUrl') || '';
 
-  // Extract the shared data from URL params (set by service worker redirect)
-  const sharedTitle = searchParams.get('title') || '';
-  const sharedText = searchParams.get('text') || '';
-  const sharedUrl = searchParams.get('url') || '';
+  const [rawText, setRawText] = useState(() =>
+    [initialTitle, initialText, initialUrl].filter(Boolean).join('\n')
+  );
+  const [sourceUrl, setSourceUrl] = useState(initialUrl);
+  const [attachedImage, setAttachedImage] = useState<string>(initialImageUrl);
 
-  // Combine all shared fields into a single raw string
-  const combinedRaw = [sharedTitle, sharedText, sharedUrl].filter(Boolean).join('\n').trim();
+  const [parsing, setParsing] = useState(false);
+  const [parsed, setParsed] = useState<IngestParsedResult | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [autoRan, setAutoRan] = useState(false);
 
-  useEffect(() => {
-    setRawText(combinedRaw);
-    if (!combinedRaw) setStatus('no-data');
-  }, [combinedRaw]);
+  // Editable Coaster fields pre-filled from parsed output
+  const [drinkName, setDrinkName] = useState(initialTitle || 'Shared Pour');
+  const [volumeOz, setVolumeOz] = useState('12');
+  const [abvPct, setAbvPct] = useState('5');
+  const [savingPour, setSavingPour] = useState(false);
+  const [savedDone, setSavedDone] = useState(false);
 
-  // Auto-ingest when we have data + auth
-  const doIngest = useCallback(async () => {
-    if (!user || !rawText) return;
+  const liveUnits = useMemo(() => {
+    const oz = parseFloat(volumeOz);
+    const abv = parseFloat(abvPct);
+    if (!Number.isFinite(oz) || oz <= 0 || !Number.isFinite(abv) || abv < 0) {
+      return typeof parsed?.standardUnits === 'number' ? parsed.standardUnits : 0;
+    }
+    return calculateStandardUnits(oz, abv);
+  }, [volumeOz, abvPct, parsed]);
 
-    setStatus('loading');
+  const handleIngest = useCallback(async () => {
+    if (!user) return;
+    const textToSend = rawText.trim() || sourceUrl.trim() || (attachedImage ? 'Shared drink photo' : '');
+    if (!textToSend) {
+      setParseError('Paste a drink description, bar menu link, or tap a quick photo.');
+      return;
+    }
+
+    setParsing(true);
+    setParseError(null);
     try {
-      const token = await getAuth().currentUser?.getIdToken();
-      if (!token) {
-        setStatus('not-authenticated');
-        return;
-      }
-
-      const now = new Date();
+      const token = await user.getIdToken();
       const res = await fetch('/api/ingest-share', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          rawText,
-          sourceTitle: sharedTitle || undefined,
-          sourceUrl: sharedUrl || undefined,
-          localDate: now.toLocaleDateString('en-CA'),
-          localTime: now.toTimeString().slice(0, 5),
+          rawText: textToSend,
+          sourceTitle: initialTitle || undefined,
+          sourceUrl: sourceUrl.trim() || undefined,
+          imageUrl: attachedImage || undefined,
+          localDate: getLocalDateStr(),
+          localTime: getLocalTimeStr(),
         }),
       });
 
-      const data: IngestResult = await res.json();
-      setResult(data);
-      setStatus(data.success ? 'success' : 'error');
-    } catch (err: any) {
-      setResult({ success: false, error: err?.message || 'Network error.' });
-      setStatus('error');
-    }
-  }, [user, rawText, sharedTitle, sharedUrl]);
+      const payload = await res.json();
+      if (!res.ok || !payload?.success) {
+        throw new Error(payload?.error || 'Could not parse shared item.');
+      }
 
-  // Auto-fire ingestion once auth resolves and we have data
+      const data = (payload.parsed ?? {}) as IngestParsedResult;
+      setParsed(data);
+      if (data.drinkName || data.activityName || initialTitle) {
+        setDrinkName(data.drinkName || data.activityName || initialTitle);
+      }
+      if (typeof data.volumeOz === 'number' && data.volumeOz > 0) {
+        setVolumeOz(String(data.volumeOz));
+      }
+      if (typeof data.abvPct === 'number' && data.abvPct >= 0) {
+        setAbvPct(String(data.abvPct));
+      }
+    } catch (err: unknown) {
+      setParseError(
+        err instanceof Error ? err.message : 'Unable to parse share payload right now.'
+      );
+    } finally {
+      setParsing(false);
+    }
+  }, [user, rawText, sourceUrl, attachedImage, initialTitle]);
+
   useEffect(() => {
-    if (!isUserLoading && user && rawText && status === 'idle') {
-      doIngest();
-    } else if (!isUserLoading && !user && rawText) {
-      setStatus('not-authenticated');
+    if (!autoRan && user && (initialText || initialUrl || initialTitle || initialImageUrl)) {
+      setAutoRan(true);
+      handleIngest();
     }
-  }, [isUserLoading, user, rawText, status, doIngest]);
+  }, [autoRan, user, initialText, initialUrl, initialTitle, initialImageUrl, handleIngest]);
 
-  // ── Render states ──
+  const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setAttachedImage(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
-  if (isUserLoading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <Loader2 className="w-10 h-10 text-primary animate-spin mx-auto" />
-          <p className="text-xs font-black uppercase tracking-[0.3em] text-muted-foreground">Authenticating Portfolio</p>
-        </div>
-      </div>
-    );
-  }
+  const handleSaveToCoaster = async () => {
+    if (!user || !db) return;
+    const oz = parseFloat(volumeOz);
+    const abv = parseFloat(abvPct);
+    const validOz = Number.isFinite(oz) && oz > 0 ? Math.round(oz * 10) / 10 : 12;
+    const validAbv = Number.isFinite(abv) && abv >= 0 ? Math.round(abv * 10) / 10 : 5;
+    const units = calculateStandardUnits(validOz, validAbv);
 
-  if (status === 'not-authenticated') {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-6">
-        <div className="max-w-md w-full text-center space-y-6">
-          <div className="p-4 bg-destructive/10 rounded-2xl w-fit mx-auto">
-            <AlertCircle className="w-10 h-10 text-destructive" />
-          </div>
-          <div className="space-y-2">
-            <h1 className="text-2xl font-black uppercase tracking-tight">Access Denied</h1>
-            <p className="text-sm text-muted-foreground">You must be logged in to ingest shared data. Open the app and sign in first.</p>
-          </div>
-          <Link href="/">
-            <Button className="rounded-xl font-bold uppercase tracking-wider">
-              <ArrowLeft className="w-4 h-4 mr-2" /> Back to CFO Terminal
-            </Button>
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  if (status === 'no-data') {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-6">
-        <div className="max-w-md w-full text-center space-y-6">
-          <div className="p-4 bg-muted rounded-2xl w-fit mx-auto">
-            <Share2 className="w-10 h-10 text-muted-foreground" />
-          </div>
-          <div className="space-y-2">
-            <h1 className="text-2xl font-black uppercase tracking-tight">No Incoming Data</h1>
-            <p className="text-sm text-muted-foreground">
-              Share text from another app (Fitbit stats, basketball shooting strings, workout notes) to this app via the OS share sheet.
-            </p>
-          </div>
-          <Link href="/">
-            <Button variant="outline" className="rounded-xl font-bold uppercase tracking-wider">
-              <ArrowLeft className="w-4 h-4 mr-2" /> Back to CFO Terminal
-            </Button>
-          </Link>
-        </div>
-      </div>
-    );
-  }
+    setSavingPour(true);
+    try {
+      await healthService.logFood(db, user.uid, {
+        name: drinkName.trim() || 'Shared Pour',
+        portionG: Math.round(validOz * 29.5735),
+        calories: 0,
+        proteinG: 0,
+        carbsG: 0,
+        fatG: 0,
+        fiberG: 0,
+        alcoholDrinks: units,
+        standardUnits: units,
+        volumeOz: validOz,
+        abvPct: validAbv,
+        drinkCategory: validAbv === 0 ? 'zero-proof' : 'cocktail',
+        isZeroProof: validAbv === 0,
+        isClearDay: false,
+        source: 'user_estimate',
+        meal: 'dinner',
+        consumedAt: getLocalTimeStr(),
+        date: getLocalDateStr(),
+      } as FoodLogEntry);
+      setSavedDone(true);
+      toast({
+        title: `Logged ${drinkName.trim() || 'Pour'}`,
+        description: `${formatUnits(units)} saved to Today’s Coaster.`,
+      });
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Could not save pour',
+        description: 'Try again in a moment.',
+      });
+    } finally {
+      setSavingPour(false);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="p-4 px-6 flex items-center gap-3 border-b bg-card/50 backdrop-blur-md sticky top-0 z-10">
-        <Link href="/">
-          <Button variant="ghost" size="icon" className="rounded-full">
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-        </Link>
-        <div className="p-2 bg-primary text-white rounded-xl shadow-md">
-          <Briefcase className="w-4 h-4" />
+    <main className="min-h-screen bg-[#FAF6F0] text-[#1F1B18] py-8 px-4 sm:px-6">
+      <div className="max-w-xl mx-auto space-y-5">
+        <div className="flex items-center justify-between text-xs font-semibold text-[#6E6359]">
+          <Link href="/" className="inline-flex items-center gap-1.5 hover:text-[#1F1B18]">
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Back to Coaster
+          </Link>
+          <span>OS Share Sheet Intake</span>
         </div>
-        <div>
-          <h1 className="text-sm font-black uppercase tracking-wider leading-none">Incoming Share</h1>
-          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mt-0.5">Data Ingestion Pipeline</p>
-        </div>
-      </header>
 
-      <main className="max-w-lg mx-auto p-6 space-y-6">
-        {/* Status Card */}
-        <div className="rounded-2xl border bg-card p-6 space-y-4">
-          {status === 'loading' && (
-            <div className="flex flex-col items-center gap-4 py-8">
-              <div className="relative">
-                <div className="absolute inset-0 bg-primary/20 rounded-full animate-ping" />
-                <div className="relative p-4 bg-primary/10 rounded-full">
-                  <Loader2 className="w-8 h-8 text-primary animate-spin" />
-                </div>
-              </div>
-              <div className="text-center space-y-1">
-                <p className="text-sm font-black uppercase tracking-widest text-foreground">Processing Incoming Data</p>
-                <p className="text-xs text-muted-foreground">The Coach is parsing your shared content…</p>
-              </div>
+        <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-3xl overflow-hidden">
+          <CardHeader className="pb-4 bg-gradient-to-br from-[#FFFDF9] via-[#FAF6F0] to-[#F5EBDC] border-b border-[#E8DFD1]">
+            <div className="flex items-center gap-2 text-[#C26D2D]">
+              <Share2 className="w-4 h-4" />
+              <span className="text-[11px] font-bold uppercase tracking-widest">
+                Coaster Share Intake
+              </span>
             </div>
-          )}
+            <CardTitle className="text-xl font-black text-[#1F1B18] tracking-tight">
+              Turn Shared Drink Links &amp; Notes into Units
+            </CardTitle>
+            <CardDescription className="text-xs text-[#6E6359]">
+              Send menu links, taplist notes, or drink screenshots straight from iOS or Android.
+            </CardDescription>
+          </CardHeader>
 
-          {status === 'success' && result?.parsed && (
-            <div className="space-y-5">
-              {/* Success header */}
-              <div className="flex items-start gap-3">
-                <div className="p-2 bg-emerald-500/10 rounded-xl shrink-0">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-600" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-black uppercase tracking-wider text-emerald-600">Data Ingested</p>
-                  <p className="text-xs text-muted-foreground mt-0.5 truncate">Doc ID: {result.documentId}</p>
-                </div>
+          <CardContent className="p-5 space-y-5">
+            {!user ? (
+              <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-5 text-center space-y-3">
+                <p className="text-sm font-bold text-[#1F1B18]">
+                  Sign in to Coaster to save shared pours
+                </p>
+                <Button
+                  asChild
+                  className="rounded-full bg-[#1F1B18] hover:bg-[#352F2A] text-[#FAF6F0] text-xs font-bold"
+                >
+                  <Link href="/">Sign In on Coaster</Link>
+                </Button>
               </div>
-
-              {/* Domain badge */}
-              {(() => {
-                const ds = getDomainStyle(result.parsed.domain);
-                const Icon = ds.icon;
-                return (
-                  <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${ds.bg} ${ds.border}`}>
-                    <Icon className={`w-3.5 h-3.5 ${ds.text}`} />
-                    <span className={`text-[10px] font-black uppercase tracking-widest ${ds.text}`}>{ds.label}</span>
-                    <span className="text-[10px] font-bold text-muted-foreground ml-1">· {result.parsed.category}</span>
-                  </div>
-                );
-              })()}
-
-              {/* Summary */}
-              <p className="text-sm font-medium text-foreground leading-relaxed">{result.parsed.summary}</p>
-
-              {/* Performance Metrics */}
-              {(result.parsed.totalAttempts != null || result.parsed.shootingPct != null) && (
-                <div className="rounded-xl border bg-amber-50/50 dark:bg-amber-950/20 p-4 space-y-3">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">Performance Metrics</p>
-                  <div className="grid grid-cols-3 gap-3">
-                    {result.parsed.totalAttempts != null && (
-                      <div className="text-center">
-                        <p className="text-2xl font-black text-foreground">{result.parsed.totalAttempts}</p>
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Attempts</p>
-                      </div>
-                    )}
-                    {result.parsed.totalMakes != null && (
-                      <div className="text-center">
-                        <p className="text-2xl font-black text-emerald-600">{result.parsed.totalMakes}</p>
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Makes</p>
-                      </div>
-                    )}
-                    {result.parsed.shootingPct != null && (
-                      <div className="text-center">
-                        <p className="text-2xl font-black text-primary">{result.parsed.shootingPct.toFixed(1)}%</p>
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Accuracy</p>
-                      </div>
-                    )}
+            ) : (
+              <>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold uppercase tracking-wider text-[#6E6359]">
+                      Shared Text or Menu Description
+                    </label>
+                    <Textarea
+                      value={rawText}
+                      onChange={(e) => setRawText(e.target.value)}
+                      rows={3}
+                      placeholder="Paste beer label, cocktail recipe, or restaurant menu text..."
+                      className="bg-[#FAF6F0] border-[#E8DFD1] text-sm"
+                    />
                   </div>
 
-                  {/* Drill Breakdown */}
-                  {result.parsed.drillBreakdown && result.parsed.drillBreakdown.length > 0 && (
-                    <div className="space-y-2 pt-2 border-t border-amber-200/50 dark:border-amber-800/30">
-                      <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground">Drill Breakdown</p>
-                      {result.parsed.drillBreakdown.map((drill, i) => (
-                        <div key={i} className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-foreground">{drill.drillName}</span>
-                          <span className="font-mono text-muted-foreground">
-                            {drill.makes != null && drill.attempts != null
-                              ? `${drill.makes}/${drill.attempts}`
-                              : '—'}
-                            {drill.pct != null && <span className="ml-2 font-bold text-primary">({drill.pct.toFixed(0)}%)</span>}
-                          </span>
-                        </div>
-                      ))}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-end">
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold uppercase tracking-wider text-[#6E6359]">
+                        Link URL (Optional)
+                      </label>
+                      <Input
+                        value={sourceUrl}
+                        onChange={(e) => setSourceUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="h-9 bg-[#FAF6F0] border-[#E8DFD1] text-sm"
+                      />
+                    </div>
+
+                    <label className="inline-flex items-center justify-center gap-2 h-9 px-3 rounded-xl bg-[#FAF6F0] border border-[#E8DFD1] hover:border-[#C26D2D] text-xs font-semibold text-[#1F1B18] cursor-pointer">
+                      <ImagePlus className="w-3.5 h-3.5 text-[#C26D2D]" />
+                      <span>{attachedImage ? 'Image attached' : 'Attach bottle / menu photo'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageFileChange}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={parsing}
+                    onClick={handleIngest}
+                    className="w-full h-9 rounded-full border-[#E8DFD1] bg-[#FAF6F0] hover:border-[#C26D2D] text-xs font-bold text-[#1F1B18]"
+                  >
+                    {parsing ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                        Analyzing with Sunny...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 mr-1.5 text-[#C26D2D]" />
+                        Parse Standard Units
+                      </>
+                    )}
+                  </Button>
+
+                  {parseError && (
+                    <p className="text-xs text-[#C26D2D] font-medium">{parseError}</p>
+                  )}
+
+                  {parsed?.summary && (
+                    <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-3 text-xs text-[#1F1B18]">
+                      <strong className="text-[#C26D2D]">Parsed note:</strong> {parsed.summary}
                     </div>
                   )}
                 </div>
-              )}
 
-              {/* Metabolic Metrics */}
-              {(result.parsed.caloriesBurned != null || result.parsed.durationMin != null || result.parsed.steps != null) && (
-                <div className="rounded-xl border bg-emerald-50/50 dark:bg-emerald-950/20 p-4 space-y-3">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Metabolic Data</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    {result.parsed.caloriesBurned != null && (
-                      <div>
-                        <p className="text-xl font-black text-foreground">{result.parsed.caloriesBurned}</p>
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Cal Burned</p>
-                      </div>
-                    )}
-                    {result.parsed.durationMin != null && (
-                      <div>
-                        <p className="text-xl font-black text-foreground">{result.parsed.durationMin}m</p>
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Duration</p>
-                      </div>
-                    )}
-                    {result.parsed.avgHeartRate != null && (
-                      <div>
-                        <p className="text-xl font-black text-foreground">{result.parsed.avgHeartRate}</p>
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Avg HR</p>
-                      </div>
-                    )}
-                    {result.parsed.steps != null && (
-                      <div>
-                        <p className="text-xl font-black text-foreground">{result.parsed.steps.toLocaleString()}</p>
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Steps</p>
-                      </div>
-                    )}
-                    {result.parsed.distanceKm != null && (
-                      <div>
-                        <p className="text-xl font-black text-foreground">{result.parsed.distanceKm.toFixed(1)} km</p>
-                        <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Distance</p>
-                      </div>
-                    )}
+                {/* Confirm & Log to Coaster */}
+                <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#6E6359] flex items-center gap-1.5">
+                      <Wine className="w-3.5 h-3.5 text-[#C26D2D]" />
+                      Confirm Pour Details
+                    </span>
+                    <span
+                      className={`text-lg font-black tabular-nums ${
+                        liveUnits === 0 ? 'text-[#3F7D58]' : 'text-[#C26D2D]'
+                      }`}
+                    >
+                      {formatUnits(liveUnits)}
+                    </span>
                   </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                    <div className="sm:col-span-6 space-y-1">
+                      <label className="text-[10px] font-bold uppercase text-[#6E6359]">
+                        Drink Name
+                      </label>
+                      <Input
+                        value={drinkName}
+                        onChange={(e) => setDrinkName(e.target.value)}
+                        className="h-9 bg-[#FFFDF9] border-[#E8DFD1] text-sm"
+                      />
+                    </div>
+                    <div className="sm:col-span-3 space-y-1">
+                      <label className="text-[10px] font-bold uppercase text-[#6E6359]">
+                        Oz
+                      </label>
+                      <Input
+                        type="number"
+                        step="0.5"
+                        min="0.5"
+                        value={volumeOz}
+                        onChange={(e) => setVolumeOz(e.target.value)}
+                        className="h-9 bg-[#FFFDF9] border-[#E8DFD1] text-sm tabular-nums"
+                      />
+                    </div>
+                    <div className="sm:col-span-3 space-y-1">
+                      <label className="text-[10px] font-bold uppercase text-[#6E6359]">
+                        ABV %
+                      </label>
+                      <Input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="95"
+                        value={abvPct}
+                        onChange={(e) => setAbvPct(e.target.value)}
+                        className="h-9 bg-[#FFFDF9] border-[#E8DFD1] text-sm tabular-nums"
+                      />
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    disabled={savingPour || savedDone}
+                    onClick={handleSaveToCoaster}
+                    className="w-full h-10 rounded-full bg-[#1F1B18] hover:bg-[#352F2A] text-[#FAF6F0] text-xs font-bold"
+                  >
+                    {savingPour ? (
+                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+                    ) : savedDone ? (
+                      <Check className="w-4 h-4 mr-1.5 text-[#84C39A]" />
+                    ) : (
+                      <Plus className="w-4 h-4 mr-1.5" />
+                    )}
+                    {savedDone
+                      ? 'Logged to Today’s Coaster'
+                      : `Log ${formatUnits(liveUnits)} to Today’s Coaster`}
+                  </Button>
                 </div>
-              )}
-
-              {/* Notes */}
-              {result.parsed.notes && (
-                <div className="rounded-xl border bg-muted/50 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-1">Notes</p>
-                  <p className="text-xs text-foreground">{result.parsed.notes}</p>
-                </div>
-              )}
-
-              {/* Raw text toggle */}
-              <button
-                onClick={() => setShowRaw(prev => !prev)}
-                className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <FileText className="w-3 h-3" />
-                Raw Input
-                {showRaw ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              </button>
-              {showRaw && (
-                <pre className="text-[11px] text-muted-foreground bg-muted/50 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap font-mono border">
-                  {rawText}
-                </pre>
-              )}
-            </div>
-          )}
-
-          {status === 'error' && (
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <div className="p-2 bg-destructive/10 rounded-xl shrink-0">
-                  <AlertCircle className="w-6 h-6 text-destructive" />
-                </div>
-                <div>
-                  <p className="text-sm font-black uppercase tracking-wider text-destructive">Ingestion Failed</p>
-                  <p className="text-xs text-muted-foreground mt-1">{result?.error || 'Unknown error during parsing.'}</p>
-                </div>
-              </div>
-
-              <Button onClick={doIngest} className="w-full rounded-xl font-bold uppercase tracking-wider">
-                Retry Ingestion
-              </Button>
-
-              {/* Show what we tried to parse */}
-              <pre className="text-[11px] text-muted-foreground bg-muted/50 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap font-mono border">
-                {rawText}
-              </pre>
-            </div>
-          )}
-        </div>
-
-        {/* Nav back */}
-        {(status === 'success' || status === 'error') && (
-          <div className="flex gap-3">
-            <Link href="/" className="flex-1">
-              <Button variant="outline" className="w-full rounded-xl font-bold uppercase tracking-wider text-xs h-12">
-                <ArrowLeft className="w-4 h-4 mr-2" /> Back to Terminal
-              </Button>
-            </Link>
-          </div>
-        )}
-      </main>
-    </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </main>
   );
 }
 
-// ─── Page wrapper with Suspense boundary for useSearchParams ────────────────
-
 export default function IncomingSharePage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="w-10 h-10 text-primary animate-spin" />
-      </div>
-    }>
-      <IncomingShareInner />
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#FAF6F0] flex items-center justify-center">
+          <Loader2 className="w-6 h-6 animate-spin text-[#C26D2D]" />
+        </div>
+      }
+    >
+      <IncomingShareContent />
     </Suspense>
   );
 }

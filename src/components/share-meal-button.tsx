@@ -1,90 +1,100 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Share2, Link2, Loader2, Check } from 'lucide-react';
+import React, { useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { useUser } from '@/firebase';
-import { toast } from '@/hooks/use-toast';
 import { createMealShare } from '@/app/actions/share-meal';
-import { shareUrl } from '@/lib/site';
-import { shareMealText } from '@/lib/share-text';
+import { shareUrl } from '@/lib/share-text';
+import { useToast } from '@/hooks/use-toast';
+import { Check, Loader2, Share2 } from 'lucide-react';
 
-/**
- * Shares one or more food-log entries as a public link. Creates the snapshot
- * via the server action, then hands the resulting /m/{shareId} URL to the
- * native share sheet (mobile) or the clipboard (desktop).
- */
-export function ShareMealButton({
-  foodLogIds,
-  label = 'Share meal',
-  mealName,
-}: {
+export interface ShareMealButtonProps {
   foodLogIds: string[];
   label?: string;
   mealName?: string;
-}) {
+}
+
+export function ShareMealButton({
+  foodLogIds,
+  label = 'Share pour',
+  mealName,
+}: ShareMealButtonProps) {
   const { user } = useUser();
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  // Resolve native-share support after mount to avoid a hydration mismatch.
-  const [canNativeShare, setCanNativeShare] = useState(false);
-  useEffect(() => {
-    setCanNativeShare(typeof navigator !== 'undefined' && 'share' in navigator);
-  }, []);
+  const { toast } = useToast();
+  const [sharing, setSharing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  const handleShare = async (e: React.MouseEvent) => {
-    // Ledger rows toggle expand on click — don't let that fire from the button.
-    e.stopPropagation();
-    if (busy || !user) return;
+  const handleShare = async () => {
+    if (!user) {
+      toast({
+        variant: 'destructive',
+        title: 'Sign in required',
+        description: 'Sign in to create a shareable Coaster card.',
+      });
+      return;
+    }
+    if (foodLogIds.length === 0) return;
 
-    setBusy(true);
+    setSharing(true);
     try {
-      const userName = user.displayName ?? undefined;
+      const userName = user.displayName || 'Coaster Member';
       const res = await createMealShare(user.uid, foodLogIds, userName);
-      if (!res.success) {
-        toast({ variant: 'destructive', title: 'Could not share', description: res.error });
-        return;
+      if (!res || !res.success || !('shareId' in res) || !res.shareId) {
+        throw new Error(
+          res && !res.success && res.error ? res.error : 'Could not generate share link.'
+        );
       }
 
       const url = shareUrl(res.shareId);
-      const shareText = shareMealText({ mealName });
+      const title = mealName ? `Coaster: ${mealName}` : 'Coaster Pour Card';
 
-      if (canNativeShare) {
+      if (typeof navigator !== 'undefined' && navigator.share) {
         try {
-          await navigator.share({ title: 'the CFO', text: shareText, url });
+          await navigator.share({ title, url });
+          toast({ title: 'Coaster card shared' });
+          return;
         } catch {
-          /* user cancelled the share sheet — leave it at that */
+          // fall back to clipboard copy if user dismissed native sheet
         }
-      } else {
-        await navigator.clipboard.writeText(url);
-        toast({ title: 'Link copied', description: 'Share link is on your clipboard.' });
       }
 
-      setDone(true);
-      setTimeout(() => setDone(false), 2000);
-    } catch (err: any) {
-      toast({ variant: 'destructive', title: 'Could not share', description: err?.message ?? 'Unknown error' });
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2500);
+        toast({
+          title: 'Share link copied',
+          description: 'Paste it anywhere to show this round.',
+        });
+      }
+    } catch (err: unknown) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not share',
+        description: err instanceof Error ? err.message : 'Try again in a moment.',
+      });
     } finally {
-      setBusy(false);
+      setSharing(false);
     }
   };
 
   return (
-    <button
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      disabled={sharing || foodLogIds.length === 0}
       onClick={handleShare}
-      disabled={busy || !user}
-      title="Share this meal as a link"
-      className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1.5 rounded-full transition-all text-muted-foreground hover:text-foreground hover:bg-muted ring-1 ring-border disabled:opacity-50"
+      className="h-7 px-2.5 text-xs font-semibold rounded-full border-[#E8DFD1] bg-[#FFFDF9] text-[#1F1B18] hover:border-[#C26D2D]"
     >
-      {busy ? (
-        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-      ) : done ? (
-        <Check className="w-3.5 h-3.5 text-emerald-600" />
-      ) : canNativeShare ? (
-        <Share2 className="w-3.5 h-3.5" />
+      {sharing ? (
+        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+      ) : copied ? (
+        <Check className="w-3 h-3 mr-1 text-[#3F7D58]" />
       ) : (
-        <Link2 className="w-3.5 h-3.5" />
+        <Share2 className="w-3 h-3 mr-1 text-[#C26D2D]" />
       )}
-      {done ? 'Shared' : label}
-    </button>
+      {copied ? 'Copied' : label}
+    </Button>
   );
 }

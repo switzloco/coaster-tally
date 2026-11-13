@@ -1,66 +1,67 @@
-import React from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 
-export const metadata = {
-  title: 'Terms of Service | the CFO',
-  description: 'Terms of service for the the CFO application.',
+export const metadata: Metadata = {
+  title: 'Terms of Service — Coaster',
+  description: 'Terms governing your use of the Coaster mindful standard drink unit ledger.',
 };
 
 export default function TermsPage() {
   return (
-    <div className="max-w-3xl mx-auto px-6 py-12 prose prose-stone">
-      <h1 className="text-3xl font-black uppercase tracking-tighter mb-8">Terms of Service</h1>
-      
-      <p className="text-muted-foreground mb-8">Last Updated: May 12, 2026</p>
+    <main className="min-h-screen bg-[#FAF6F0] text-[#1F1B18] py-12 px-4 sm:px-6">
+      <div className="max-w-2xl mx-auto rounded-3xl bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm p-6 sm:p-10 space-y-6">
+        <div className="space-y-2 border-b border-[#E8DFD1] pb-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-[#C26D2D]">
+            Coaster Legal
+          </p>
+          <h1 className="text-3xl font-black tracking-tight">Terms of Service</h1>
+          <p className="text-xs text-[#6E6359]">Effective November 2026</p>
+        </div>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">1. Acceptance of Terms</h2>
-        <p>
-          By accessing or using <strong>the CFO (Chief Fitness Officer)</strong>, you agree to be bound by these Terms of Service. If you do not agree to these terms, please do not use the application.
-        </p>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">1. Mindful Journal, Not Medical Advice</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            Coaster helps you log drinks in NIAAA Standard Drink Units (14g / 0.6 fl oz of pure
+            alcohol) and spot personal patterns over time. Coaster and Sunny do not provide medical
+            diagnosis, clinical treatment, or alcohol dependency counseling.
+          </p>
+        </section>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4 text-red-600">2. Medical Disclaimer</h2>
-        <p className="font-bold">
-          the CFO is a data analysis tool and is NOT a medical device.
-        </p>
-        <p className="mt-2">
-          The information, including but not limited to, text, graphics, images and other material contained in this app are for informational purposes only. No material on this site is intended to be a substitute for professional medical advice, diagnosis or treatment. Always seek the advice of your physician or other qualified health care provider with any questions you may have regarding a medical condition or treatment.
-        </p>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">2. Never Use to Judge Driving Safety</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            Coaster does not measure Blood Alcohol Concentration (BAC) or cognitive impairment. Do
+            not rely on Coaster logs or unit math to decide whether you are safe to drive or operate
+            machinery.
+          </p>
+        </section>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">3. User Data and Accounts</h2>
-        <p>
-          You are responsible for maintaining the confidentiality of your account credentials. You agree to provide accurate data from your third-party health providers (Fitbit, Google Health). We reserve the right to terminate accounts that violate our security policies or attempt to misuse the application.
-        </p>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">3. Your Data &amp; Account</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            You retain ownership of the pour logs, notes, and shared links you create. We ask that
+            you share links responsibly and avoid posting unlawful content through OS share targets
+            or shared round cards.
+          </p>
+        </section>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">4. Limitation of Liability</h2>
-        <p>
-          the CFO and its developers shall not be held liable for any health issues, injuries, or data loss resulting from the use of the application. The application provides AI-generated insights which should be verified by a professional before making any significant lifestyle changes.
-        </p>
-      </section>
+        <section className="space-y-2">
+          <h2 className="text-base font-bold">4. Availability</h2>
+          <p className="text-sm text-[#6E6359] leading-relaxed">
+            Coaster is provided &ldquo;as is&rdquo; without warranties of uninterrupted availability.
+            You may export or permanently delete your account at any time from Preferences.
+          </p>
+        </section>
 
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">5. Modifications to Service</h2>
-        <p>
-          We reserve the right to modify or discontinue, temporarily or permanently, the service with or without notice. As this application is under active development (including the migration to Google Health API), features may change frequently.
-        </p>
-      </section>
-
-      <section className="mb-10">
-        <h2 className="text-xl font-bold mb-4">6. Contact Information</h2>
-        <p>
-          For any questions regarding these terms, please contact us at <a href="mailto:nicholas.switzer@gmail.com" className="text-blue-600 hover:underline">nicholas.switzer@gmail.com</a>.
-        </p>
-      </section>
-
-      <footer className="mt-12 pt-8 border-t text-sm text-muted-foreground">
-        <Link href="/" className="hover:text-foreground">← Back to Dashboard</Link>
-      </footer>
-    </div>
+        <div className="pt-4 border-t border-[#E8DFD1] flex items-center justify-between text-xs font-semibold text-[#6E6359]">
+          <Link href="/" className="hover:text-[#1F1B18] underline underline-offset-4">
+            Back to Coaster
+          </Link>
+          <Link href="/privacy" className="hover:text-[#1F1B18] underline underline-offset-4">
+            Privacy Policy
+          </Link>
+        </div>
+      </div>
+    </main>
   );
 }
