@@ -1,7 +1,17 @@
 {
   "apphosting": {
-    "backendId": "studio",
-    "alwaysDeployFromSource": true
+    "backendId": "coaster",
+    "rootDir": ".",
+    "alwaysDeployFromSource": true,
+    "ignore": [
+      "node_modules",
+      ".git",
+      ".next",
+      "coverage",
+      "firebase-debug.log",
+      "firebase-debug.*.log",
+      "functions"
+    ]
   },
   "firestore": {
     "rules": "firestore.rules",

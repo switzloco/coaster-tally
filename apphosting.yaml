@@ -1,137 +1,58 @@
-# Settings to manage and configure a Firebase App Hosting backend.
+# Settings to manage and configure a Firebase App Hosting backend for Coaster.
 # https://firebase.google.com/docs/app-hosting/configure
 
-# Secrets injected into the Cloud Run container at runtime.
-# Store the value first: firebase apphosting:secrets:set CRON_SECRET
 env:
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
-    value: "AIzaSyDqnzXqOR6Hgy-89JrHXvN5WW_2Cg6b9Ho"
+    value: "AIzaSyAnvxRnS86VIkc9otvuh4Vg42g25AJnfd4"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
-    value: "studio-4236902803-1eba2.firebaseapp.com"
+    value: "coaster-tally-2026.firebaseapp.com"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
-    value: "studio-4236902803-1eba2"
+    value: "coaster-tally-2026"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-    value: "studio-4236902803-1eba2.firebasestorage.app"
+    value: "coaster-tally-2026.firebasestorage.app"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
-    value: "473903412658"
+    value: "250751511013"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_APP_ID
-    value: "1:473903412658:web:eef5c9dedfc81194f020ab"
+    value: "1:250751511013:web:046144a8ddc753664ae70c"
     availability:
       - BUILD
       - RUNTIME
-  # Canonical base URL for share links + OG/social metadata.
+  # Canonical base URL for share links, 1-tap Coaster email actions, and OG metadata.
   - variable: NEXT_PUBLIC_SITE_URL
-    value: "https://cfofitness.app"
-    availability:
-      - BUILD
-      - RUNTIME
-  - variable: NEXT_PUBLIC_FITBIT_CLIENT_ID
-    value: "23V3PJ"
-    availability:
-      - BUILD
-      - RUNTIME
-  - variable: NEXT_PUBLIC_OURA_CLIENT_ID
-    value: "c3acec4a-80cb-4b77-a202-a3899ee7079d"
-    availability:
-      - BUILD
-      - RUNTIME
-  
-  - variable: NEXT_PUBLIC_GOOGLE_HEALTH_CLIENT_ID
-    value: "473903412658-olu2depq9l2fh5j460l9j61fhmblnkgj.apps.googleusercontent.com"
+    value: "https://coaster--coaster-tally-2026.us-central1.hosted.app"
     availability:
       - BUILD
       - RUNTIME
 
-  - variable: NEXT_PUBLIC_WITHINGS_CLIENT_ID
-    value: "46f572d1107de95fd0f9e62057b09adadf35ea7906156a785d962cccb57f9530"
-    availability:
-      - BUILD
-      - RUNTIME
-
+  # Server-side Genkit / Gemini API key (Secret Manager)
   - variable: GOOGLE_GENAI_API_KEY
     secret: GOOGLE_GENAI_API_KEY
     availability:
       - BUILD
       - RUNTIME
 
-  # Dedicated USDA FoodData Central key for nutrition_lookup — avoids the
-  # shared DEMO_KEY 100 req/hr rate limit (the source of the 429s).
-  - variable: USDA_FOOD_API_KEY
-    secret: USDA_FOOD_API_KEY
-    availability:
-      - RUNTIME
-
-  # --- Arize Phoenix observability (hackathon) ---
-  # PHOENIX_ENABLED must be "true" or all Phoenix tracing/MCP code is a no-op.
-  - variable: PHOENIX_ENABLED
-    value: "false"
-    availability:
-      - RUNTIME
-  - variable: PHOENIX_COLLECTOR_ENDPOINT
-    value: "https://app.phoenix.arize.com/s/nicholas-switzer"
-    availability:
-      - RUNTIME
-  - variable: PHOENIX_PROJECT_NAME
-    value: "cfo-fitness"
-    availability:
-      - RUNTIME
-  - variable: PHOENIX_API_KEY
-    secret: PHOENIX_API_KEY
-    availability:
-      - RUNTIME
-
+  # Scheduled morning & evening briefing auth + HMAC action token signing (Secret Manager)
   - variable: CRON_SECRET
     secret: CRON_SECRET
     availability:
       - RUNTIME
 
-  - variable: FITBIT_CLIENT_SECRET
-    secret: FITBIT_CLIENT_SECRET
-    availability:
-      - RUNTIME
-
-  - variable: OURA_CLIENT_SECRET
-    secret: OURA_CLIENT_SECRET
-    availability:
-      - RUNTIME
-
-  - variable: GOOGLE_HEALTH_CLIENT_SECRET
-    secret: GOOGLE_HEALTH_CLIENT_SECRET
-    availability:
-      - RUNTIME
-
-  - variable: WITHINGS_CLIENT_SECRET
-    secret: WITHINGS_CLIENT_SECRET
-    availability:
-      - RUNTIME
-
-  # --- STRIPE WEB BILLING (Uncomment after running: firebase apphosting:secrets:set STRIPE_SECRET_KEY & STRIPE_WEBHOOK_SECRET) ---
-  # Note: STRIPE_PRICE_*_ID are optional — if omitted, inline price_data (.99/yr, .99/mo,  once) is used automatically.
-  # - variable: STRIPE_SECRET_KEY
-  #   secret: STRIPE_SECRET_KEY
-  #   availability:
-  #     - RUNTIME
-  # - variable: STRIPE_WEBHOOK_SECRET
-  #   secret: STRIPE_WEBHOOK_SECRET
-  #   availability:
-  #     - RUNTIME
-
-  # --- AUTOMATED 3X/DAY OUTREACH ---
+  # 2-way Gmail Companion (+coaster@) transport
   - variable: GMAIL_USER
     value: "nicholas.switzer@gmail.com"
     availability:
@@ -140,39 +61,10 @@ env:
     secret: GMAIL_APP_PASSWORD
     availability:
       - RUNTIME
-  # - variable: RESEND_API_KEY
-  #   secret: RESEND_API_KEY
-  #   availability:
-  #     - RUNTIME
-  - variable: NEXT_PUBLIC_DISCORD_APP_ID
-    value: "1570868560065077420"
-    availability:
-      - BUILD
-      - RUNTIME
-  - variable: DISCORD_PUBLIC_KEY
-    value: "3074488a6631a04d0b80b4cea61f07ee9ff5a1bb759ca911cf2924936b960f45"
-    availability:
-      - RUNTIME
-  - variable: DISCORD_BOT_TOKEN
-    secret: DISCORD_BOT_TOKEN
-    availability:
-      - RUNTIME
 
 runConfig:
-  # --- SCALING CONFIGURATION ---
-  # minInstances: Minimum number of instances kept warm at all times.
-  # Cost implication: Each warm instance incurs idle Cloud Run charges (~$0.00002/vCPU-second).
-  # Set to 0 for lowest cost (cold starts on low traffic); set to 1+ to eliminate cold starts.
   minInstances: 0
-
-  # maxInstances: Hard ceiling on horizontal scaling under load.
-  # Cost implication: Cloud Run bills per request and per instance-hour.
-  # At maxInstances: 3, a sustained traffic spike can incur up to 10x the baseline cost.
-  # Each instance uses the memory/CPU defined in your Cloud Run service config.
-  # Recommended: start at 3-5 for production, increase after load testing.
   maxInstances: 3
-  
-  # Performance configuration
   cpu: 1
   memoryMiB: 512
   concurrency: 80

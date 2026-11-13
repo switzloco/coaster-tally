@@ -1,14 +1,14 @@
 {
-  "name": "the CFO",
-  "short_name": "the CFO",
-  "description": "Manage your body like a high-stakes financial portfolio.",
+  "name": "Coaster — Mindful Drink Tally",
+  "short_name": "Coaster",
+  "description": "Mindful standard drink tally & 30-day trend companion powered by Hybrid AI.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#E8EAF6",
-  "theme_color": "#3F51B5",
-  "categories": ["health", "fitness", "lifestyle"],
+  "background_color": "#FAF6F0",
+  "theme_color": "#C26D2D",
+  "categories": ["health", "lifestyle"],
   "share_target": {
     "action": "/incoming-share",
     "method": "POST",
@@ -16,7 +16,13 @@
     "params": {
       "title": "title",
       "text": "text",
-      "url": "url"
+      "url": "url",
+      "files": [
+        {
+          "name": "media",
+          "accept": ["image/*"]
+        }
+      ]
     }
   },
   "icons": [

@@ -12,7 +12,7 @@ import { getAuth } from 'firebase-admin/auth';
 
 function getAdminApp() {
   if (!getApps().length) {
-    const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'studio-4236902803-1eba2';
+    const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || 'coaster-tally-2026';
     initializeApp({ projectId });
   }
   return getApp();
