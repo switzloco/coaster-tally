@@ -258,10 +258,385 @@ export interface HealthData {
   outreachEnabled?: boolean;
   outreachEmail?: string;
   outreachDiscordUserId?: string;
+  displayName?: string;
+  dailyAlcoholDrinks?: number;
+  foundingFriend?: boolean;
+}
+
+export type DrinkCategory =
+  | 'beer'
+  | 'ipa'
+  | 'wine'
+  | 'spirit'
+  | 'cocktail'
+  | 'seltzer'
+  | 'zero_proof'
+  | 'clear_day'
+  | 'other';
+
+export interface CoasterFoodLogEntry {
+  id?: string;
+  name?: string;
+  foodName?: string;
+  meal?: string;
+  mealType?: string;
+  date?: string;
+  consumedAt?: string;
+  calories?: number;
+  proteinG?: number;
+  fatG?: number;
+  carbsG?: number;
+  fiberG?: number;
+  sodiumMg?: number;
+  alcoholDrinks?: number;
+  standardUnits?: number;
+  drinkCategory?: DrinkCategory;
+  volumeOz?: number;
+  abvPct?: number;
+  isZeroProof?: boolean;
+  isClearDay?: boolean;
+  alternativeSuggested?: string;
+  ignored?: boolean;
+  createdAt?: string;
+}
+
+export interface DrinkPreset {
+  key: string;
+  label: string;
+  shortLabel: string;
+  category: DrinkCategory;
+  volumeOz: number;
+  abvPct: number;
+  standardUnits: number;
+  isZeroProof: boolean;
+  isClearDay?: boolean;
+  description: string;
+}
+
+export function mlToOz(ml: number): number {
+  if (!Number.isFinite(ml) || ml <= 0) return 0;
+  return Math.round((ml / 29.5735) * 100) / 100;
+}
+
+/**
+ * NIAAA Standard Drink formula:
+ * 1.0 Standard Drink = 14g pure ethanol = 0.6 fl oz pure ethanol.
+ */
+export function calculateStandardUnits(volumeOz: number, abvPct: number): number {
+  if (!Number.isFinite(volumeOz) || !Number.isFinite(abvPct) || volumeOz <= 0 || abvPct <= 0) {
+    return 0;
+  }
+  return Math.round(((volumeOz * (abvPct / 100)) / 0.6) * 10) / 10;
+}
+
+export function formatUnits(units: number): string {
+  const safe = Number.isFinite(units) && units > 0 ? Math.round(units * 10) / 10 : 0;
+  return `${safe.toFixed(1)}u`;
+}
+
+export const DRINK_PRESETS: Record<string, DrinkPreset> = {
+  log_beer: {
+    key: 'log_beer',
+    label: '+1.0u Beer',
+    shortLabel: 'Beer (12oz 5%)',
+    category: 'beer',
+    volumeOz: 12,
+    abvPct: 5.0,
+    standardUnits: 1.0,
+    isZeroProof: false,
+    description: '12oz beer at 5.0% ABV',
+  },
+  log_ipa: {
+    key: 'log_ipa',
+    label: '+1.8u Craft IPA',
+    shortLabel: 'Craft IPA (16oz 6.8%)',
+    category: 'ipa',
+    volumeOz: 16,
+    abvPct: 6.8,
+    standardUnits: 1.8,
+    isZeroProof: false,
+    description: '16oz pint IPA at 6.8% ABV',
+  },
+  log_wine: {
+    key: 'log_wine',
+    label: '+1.0u Wine',
+    shortLabel: 'Wine (5oz 12%)',
+    category: 'wine',
+    volumeOz: 5,
+    abvPct: 12.0,
+    standardUnits: 1.0,
+    isZeroProof: false,
+    description: '5oz wine pour at 12.0% ABV',
+  },
+  log_spirit: {
+    key: 'log_spirit',
+    label: '+1.0u Shot / Neat',
+    shortLabel: 'Spirit (1.5oz 40%)',
+    category: 'spirit',
+    volumeOz: 1.5,
+    abvPct: 40.0,
+    standardUnits: 1.0,
+    isZeroProof: false,
+    description: '1.5oz neat spirit at 40.0% ABV',
+  },
+  log_cocktail: {
+    key: 'log_cocktail',
+    label: '+1.0u Cocktail/Shot',
+    shortLabel: 'Cocktail (1.5oz 40%)',
+    category: 'cocktail',
+    volumeOz: 1.5,
+    abvPct: 40.0,
+    standardUnits: 1.0,
+    isZeroProof: false,
+    description: 'Standard single-pour cocktail (1.5oz 40% base)',
+  },
+  log_seltzer: {
+    key: 'log_seltzer',
+    label: '+1.0u Seltzer',
+    shortLabel: 'Seltzer (12oz 5%)',
+    category: 'seltzer',
+    volumeOz: 12,
+    abvPct: 5.0,
+    standardUnits: 1.0,
+    isZeroProof: false,
+    description: '12oz hard seltzer at 5.0% ABV',
+  },
+  log_zero_proof: {
+    key: 'log_zero_proof',
+    label: '0.0u Zero-Proof Swap',
+    shortLabel: 'Zero-Proof Swap',
+    category: 'zero_proof',
+    volumeOz: 12,
+    abvPct: 0.0,
+    standardUnits: 0.0,
+    isZeroProof: true,
+    description: 'Crisp zero-proof or NA drink swap',
+  },
+  log_clear_day: {
+    key: 'log_clear_day',
+    label: 'Clear Day 0.0u',
+    shortLabel: 'Clear Day',
+    category: 'clear_day',
+    volumeOz: 0,
+    abvPct: 0.0,
+    standardUnits: 0.0,
+    isZeroProof: false,
+    isClearDay: true,
+    description: 'Clear day check-in (0.0u)',
+  },
+};
+
+export function getEntryDateKey(entry: Partial<CoasterFoodLogEntry>): string {
+  if (entry.date && /^\d{4}-\d{2}-\d{2}$/.test(entry.date)) return entry.date;
+  const fromConsumed = (entry.consumedAt || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(fromConsumed) ? fromConsumed : '';
+}
+
+export function isClearDayEntry(entry: Partial<CoasterFoodLogEntry>): boolean {
+  if (entry.ignored) return false;
+  if (entry.isClearDay || entry.drinkCategory === 'clear_day') return true;
+  return /\bclear\s*day\b/i.test(entry.name || entry.foodName || '');
+}
+
+export function isZeroProofEntry(entry: Partial<CoasterFoodLogEntry>): boolean {
+  if (entry.ignored || isClearDayEntry(entry)) return false;
+  return Boolean(entry.isZeroProof) || entry.drinkCategory === 'zero_proof';
+}
+
+export function getEntryUnits(entry: Partial<CoasterFoodLogEntry>): number {
+  if (entry.ignored || isClearDayEntry(entry) || isZeroProofEntry(entry)) {
+    return 0;
+  }
+  if (typeof entry.standardUnits === 'number' && Number.isFinite(entry.standardUnits) && entry.standardUnits >= 0) {
+    return Math.round(entry.standardUnits * 10) / 10;
+  }
+  if (typeof entry.alcoholDrinks === 'number' && Number.isFinite(entry.alcoholDrinks) && entry.alcoholDrinks >= 0) {
+    return Math.round(entry.alcoholDrinks * 10) / 10;
+  }
+  if (typeof entry.volumeOz === 'number' && typeof entry.abvPct === 'number') {
+    return calculateStandardUnits(entry.volumeOz, entry.abvPct);
+  }
+  return 0;
+}
+
+export interface DailyTrendPoint {
+  date: string;
+  units: number;
+  drinkCount: number;
+  clearDay: boolean;
+  zeroProofCount: number;
+}
+
+export interface DrinkTrendSummary {
+  todayUnits: number;
+  sevenDayTotal: number;
+  sevenDayAvg: number;
+  thirtyDayTotal: number;
+  thirtyDayAvg: number;
+  clearDaysLast7: number;
+  clearDaysLast30: number;
+  zeroProofLast30: number;
+  todayEntriesCount: number;
+}
+
+function shiftIsoDate(isoDate: string, deltaDays: number): string {
+  const [y, m, d] = isoDate.split('-').map((n) => Number(n));
+  if (!y || !m || !d) return isoDate;
+  const utc = Date.UTC(y, m - 1, d) + deltaDays * 86_400_000;
+  return new Date(utc).toISOString().slice(0, 10);
+}
+
+export function computeDailyTrendSeries(
+  entries: CoasterFoodLogEntry[],
+  endDateIso: string,
+  days = 7,
+): DailyTrendPoint[] {
+  const safeDays = Math.max(1, Math.min(180, Math.round(days)));
+  const activeEntries = (entries || []).filter((e) => !e.ignored);
+  const byDate = new Map<string, CoasterFoodLogEntry[]>();
+  let earliestDate: string | null = null;
+
+  for (const entry of activeEntries) {
+    const dateKey = getEntryDateKey(entry);
+    if (!dateKey) continue;
+    if (!earliestDate || dateKey < earliestDate) earliestDate = dateKey;
+    const bucket = byDate.get(dateKey) ?? [];
+    bucket.push(entry);
+    byDate.set(dateKey, bucket);
+  }
+
+  const series: DailyTrendPoint[] = [];
+  for (let offset = -(safeDays - 1); offset <= 0; offset++) {
+    const date = shiftIsoDate(endDateIso, offset);
+    const dayEntries = byDate.get(date) ?? [];
+    let units = 0;
+    let drinkCount = 0;
+    let explicitClear = false;
+    let zeroProofCount = 0;
+
+    for (const entry of dayEntries) {
+      if (isClearDayEntry(entry)) {
+        explicitClear = true;
+        continue;
+      }
+      if (isZeroProofEntry(entry)) {
+        zeroProofCount += 1;
+        continue;
+      }
+      const entryUnits = getEntryUnits(entry);
+      if (entryUnits > 0) {
+        units += entryUnits;
+        drinkCount += 1;
+      }
+    }
+
+    units = Math.round(units * 10) / 10;
+    const trackedZeroPriorDay = Boolean(earliestDate && date >= earliestDate && date < endDateIso && units === 0);
+    const clearDay = units === 0 && (explicitClear || trackedZeroPriorDay || zeroProofCount > 0);
+
+    series.push({
+      date,
+      units,
+      drinkCount,
+      clearDay,
+      zeroProofCount,
+    });
+  }
+
+  return series;
+}
+
+export function computeTrendSummary(
+  entries: CoasterFoodLogEntry[],
+  todayIso: string,
+): DrinkTrendSummary {
+  const series30 = computeDailyTrendSeries(entries, todayIso, 30);
+  const series7 = series30.slice(-7);
+  const todayPoint = series30[series30.length - 1] ?? {
+    date: todayIso,
+    units: 0,
+    drinkCount: 0,
+    clearDay: false,
+    zeroProofCount: 0,
+  };
+
+  const sumUnits = (pts: DailyTrendPoint[]) =>
+    Math.round(pts.reduce((acc, p) => acc + p.units, 0) * 10) / 10;
+
+  const sevenDayTotal = sumUnits(series7);
+  const thirtyDayTotal = sumUnits(series30);
+  const todayEntriesCount = (entries || []).filter(
+    (e) => !e.ignored && getEntryDateKey(e) === todayIso,
+  ).length;
+
+  return {
+    todayUnits: todayPoint.units,
+    sevenDayTotal,
+    sevenDayAvg: Math.round((sevenDayTotal / 7) * 10) / 10,
+    thirtyDayTotal,
+    thirtyDayAvg: Math.round((thirtyDayTotal / 30) * 10) / 10,
+    clearDaysLast7: series7.filter((p) => p.clearDay).length,
+    clearDaysLast30: series30.filter((p) => p.clearDay).length,
+    zeroProofLast30: series30.reduce((acc, p) => acc + p.zeroProofCount, 0),
+    todayEntriesCount,
+  };
+}
+
+const ZERO_PROOF_BY_CATEGORY: Record<string, string[]> = {
+  ipa: [
+    'HopLark Citra Sparkling HopTea (big citrus-pine aroma, 0.0u)',
+    'Athletic Brewing Run Wild NA IPA (all the cascade hops, ~0.4% trace)',
+    'Lagunitas Hoppy Refresher over lots of ice with a lime wedge (0.0u)',
+  ],
+  beer: [
+    'Crisp Peroni 0.0 or Heineken 0.0 ice-cold out of the bottle',
+    'Corona Non-Alcoholic with fresh lime and a pinch of flaky salt',
+    'Best Day Kolsch NA for that clean, bready patio finish',
+  ],
+  wine: [
+    'Oddbird Blanc de Blancs sparkling (dry, celebratory fizz at 0.0u)',
+    'Proxies Zephyr or chilled tart cherry + soda + rosemary sprig in a wine stem',
+    'Leitz Eins Zwei Zero Riesling for crisp acidity without the buzz',
+  ],
+  cocktail: [
+    'St. Agrestis Phony Negroni over a big cube with an orange twist',
+    'Ginger hibiscus cooler over crushed ice with fresh lime',
+    'Sparkling yuzu tonic with a smashed mint leaf',
+  ],
+  spirit: [
+    'Seedlip Spice 94 + ginger beer + squeeze of lime',
+    'St. Agrestis Phony Mezcal Negroni over a single big ice cube',
+    'Ghia bitter botanical spritz topped with cold club soda',
+  ],
+  seltzer: [
+    'Sparkling yuzu + grapefruit seltzer over crushed ice',
+    'Spindrift Blood Orange Tangerine with a splash of ginger beer',
+    'Aura Bora Lavender Cucumber for a crisp herbal sip',
+  ],
+  default: [
+    'Sparkling yuzu over lots of ice with a citrus twist',
+    'St. Agrestis Phony Negroni over a big cube',
+    'Ginger hibiscus fizz with fresh lime',
+  ],
+};
+
+export function pickZeroProofAlternative(category?: DrinkCategory, seed = 0): string {
+  const pool =
+    (category && ZERO_PROOF_BY_CATEGORY[category]) || ZERO_PROOF_BY_CATEGORY.default;
+  const idx = Math.abs(Math.floor(seed)) % pool.length;
+  return pool[idx];
+}
+
+export function shouldSuggestAlternative(
+  alcoholicLogCount: number,
+  explicitlyRequested = false,
+): boolean {
+  if (explicitlyRequested) return true;
+  return alcoholicLogCount > 0 && alcoholicLogCount % 3 === 0;
 }
 
 export type OutreachChannel = 'email' | 'discord' | 'both';
-export type OutreachCadence = '3x' | 'morning_only';
+export type OutreachCadence = '2x' | 'daily' | 'weekly' | 'pause' | '3x' | 'morning_only';
 export type OutreachWindow = 'morning' | 'midday' | 'night';
 
 export interface OutreachPreferences {
@@ -360,8 +735,10 @@ export interface UserPreferences {
   aiModelTier?: 'flash' | 'flash-lite';
   /** Strict On-Device SEC Insider Privacy Lock (`InferenceMode.ONLY_ON_DEVICE`). */
   secPrivacyLock?: boolean;
-  /** Automated free 3x/day Email & Discord outreach configuration. */
+  /** Automated Email & Discord outreach configuration. */
   outreach?: OutreachPreferences;
+  /** Founding Friend full-access entitlement flag for Coaster. */
+  foundingFriend?: boolean;
 }
 
 /** A cached, generated Daily Brief — one per calendar day, doc ID == isoDate. */

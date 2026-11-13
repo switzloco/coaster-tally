@@ -3,19 +3,21 @@ import { getAdminFirestore } from '@/firebase/admin';
 import { adminHealthService } from '@/lib/health-service-admin';
 import type { OutreachWindow } from '@/lib/health-service';
 import { resolveLocalClock } from '@/lib/outreach-auth';
+import { isWindowAllowedForCadence } from '@/lib/outreach-composer';
 import { dispatchOutreachForUser } from '@/lib/outreach-service';
 import { pollGmailOutreachReplies } from '@/lib/outreach-gmail-inbound';
 import { pollDiscordOutreachReplies } from '@/lib/outreach-discord-inbound';
 
 /**
- * @fileOverview 5-minute cron endpoint for inbound Gmail reply polling + 3x/day outreach.
+ * @fileOverview 5-minute cron endpoint for inbound Gmail reply polling + Morning/Evening Coaster outreach.
  *
  * Schedule every 5 minutes in Cloud Scheduler:
  *   GET /api/cron/outreach-dispatch?secret=<CRON_SECRET>
  *
- * Polls Gmail IMAP (`[Gmail]/All Mail` via `X-GM-RAW`) for replies to `+cfo@` and
+ * Polls Gmail IMAP (`[Gmail]/All Mail` via `X-GM-RAW`) for replies to `+coaster@` and
  * evaluates each enrolled user's local timezone hour against their configured
- * `morningHour` (default 7), `middayHour` (default 12), and `nightHour` (default 19),
+ * `morningHour` (default 9), `middayHour` (default 13), and `nightHour` (default 19),
+ * honoring cadence (`2x`, `daily`, `weekly`, `pause`, `3x`, `morning_only`) and
  * deduplicating each window via `lastDispatchedKey`.
  */
 
@@ -30,8 +32,8 @@ function matchWindowForHour(params: {
   middayHour?: number;
   nightHour?: number;
 }): OutreachWindow | null {
-  const m = params.morningHour ?? 7;
-  const d = params.middayHour ?? 12;
+  const m = params.morningHour ?? 9;
+  const d = params.middayHour ?? 13;
   const n = params.nightHour ?? 19;
   if (params.hour === m) return 'morning';
   if (params.hour === d) return 'midday';
@@ -101,6 +103,15 @@ export async function GET(request: NextRequest) {
     });
 
     if (!matchedWindow) continue;
+    if (
+      !isWindowAllowedForCadence({
+        cadence: outreach.cadence ?? '2x',
+        window: matchedWindow,
+        localDate: clock.localDate,
+      })
+    ) {
+      continue;
+    }
     if (outreach.lastDispatchedKey === `${clock.localDate}:${matchedWindow}`) continue;
 
     dueQueue.push({ uid, window: matchedWindow });

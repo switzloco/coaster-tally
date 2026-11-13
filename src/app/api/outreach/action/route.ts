@@ -1,18 +1,33 @@
+import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  computeDailyTrendSeries,
+  formatUnits,
+  getEntryDateKey,
+  getEntryUnits,
+  isClearDayEntry,
+  isZeroProofEntry,
+  type CoasterFoodLogEntry,
+} from '@/lib/health-service';
 import { verifyOutreachToken } from '@/lib/outreach-auth';
 import { buildLiveUserOutreach, executeOutreachQuickAction } from '@/lib/outreach-service';
 import { buildOutreachActionUrl } from '@/lib/outreach-email';
 import { SITE_URL } from '@/lib/site';
 
 /**
- * @fileOverview Stateless 1-tap Email action & RFC 8058 One-Click Unsubscribe endpoint.
+ * @fileOverview Stateless 1-tap Coaster action, RFC 8058 One-Click Unsubscribe,
+ * and Zero-Login Live Coaster & Trends HTML page.
  *
  * - HEAD: no-op 200 (guards against email link prefetchers mutating state)
- * - POST: RFC 8058 `List-Unsubscribe=One-Click` native Gmail/Yahoo unsubscribe
- * - GET:  Executes signed preset / pause / cancel token and renders confirmation HTML
+ * - POST: RFC 8058 `List-Unsubscribe=One-Click` native unsubscribe
+ * - GET:  Executes signed action token (`?token=...` or `?t=...`) or renders Live Coaster
  */
 
 export const dynamic = 'force-dynamic';
+
+function getCoasterSiteUrl(): string {
+  return (process.env.NEXT_PUBLIC_SITE_URL || SITE_URL).replace(/\/+$/, '');
+}
 
 function escapeHtml(raw: string): string {
   return raw
@@ -27,22 +42,27 @@ function renderConfirmationPage(params: {
   detail: string;
   updatedHeadline?: string;
   updatedBody?: string;
+  liveCoasterUrl?: string;
   secondaryActionLabel?: string;
   secondaryActionUrl?: string;
   isError?: boolean;
 }): string {
-  const accent = params.isError ? '#dc2626' : '#059669';
-  const runwayCard = params.updatedHeadline
-    ? `<div style="background:#ecfdf5;border-left:4px solid #10b981;border-radius:10px;padding:14px 16px;margin:18px 0;text-align:left;">
-         <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:#059669;margin-bottom:4px;">Updated Live Clock</div>
-         <div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:4px;">${escapeHtml(params.updatedHeadline)}</div>
-         ${params.updatedBody ? `<div style="font-size:13px;color:#334155;line-height:1.5;">${escapeHtml(params.updatedBody)}</div>` : ''}
+  const accent = params.isError ? '#B94A3B' : '#3F7D58';
+  const noteCard = params.updatedHeadline
+    ? `<div style="background:#FDF5EB;border-left:4px solid #C26D2D;border-radius:12px;padding:14px 16px;margin:18px 0;text-align:left;">
+         <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;color:#9A4E1A;margin-bottom:4px;">Sunny &middot; Coaster Update</div>
+         <div style="font-size:16px;font-weight:800;color:#1F1B18;margin-bottom:4px;">${escapeHtml(params.updatedHeadline)}</div>
+         ${params.updatedBody ? `<div style="font-size:13px;color:#4A3F35;line-height:1.55;">${escapeHtml(params.updatedBody)}</div>` : ''}
        </div>`
+    : '';
+
+  const liveBtn = params.liveCoasterUrl
+    ? `<a href="${params.liveCoasterUrl}" style="display:inline-block;margin:6px;padding:10px 18px;border-radius:10px;background:#C26D2D;color:#FFFDF9;font-size:13px;font-weight:700;text-decoration:none;">Open Live Coaster &amp; Trends</a>`
     : '';
 
   const secondaryBtn =
     params.secondaryActionLabel && params.secondaryActionUrl
-      ? `<a href="${params.secondaryActionUrl}" style="display:inline-block;margin:6px;padding:10px 16px;border-radius:10px;border:1px solid #cbd5e1;color:#334155;font-size:13px;font-weight:700;text-decoration:none;">${escapeHtml(params.secondaryActionLabel)}</a>`
+      ? `<a href="${params.secondaryActionUrl}" style="display:inline-block;margin:6px;padding:10px 16px;border-radius:10px;border:1px solid #DED2C0;background:#F5EFE6;color:#1F1B18;font-size:13px;font-weight:700;text-decoration:none;">${escapeHtml(params.secondaryActionLabel)}</a>`
       : '';
 
   return `<!DOCTYPE html>
@@ -50,63 +70,135 @@ function renderConfirmationPage(params: {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(params.title)} — the CFO</title>
+    <title>${escapeHtml(params.title)} &mdash; Sunny &middot; Coaster</title>
   </head>
-  <body style="margin:0;padding:24px 16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;">
-    <div style="max-width:480px;margin:24px auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:18px;padding:28px 24px;text-align:center;box-shadow:0 8px 24px rgba(15,23,42,0.05);">
-      <div style="font-size:11px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:${accent};margin-bottom:8px;">
-        the CFO · Portfolio Dispatch
+  <body style="margin:0;padding:24px 16px;background:#FAF6F0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1F1B18;">
+    <div style="max-width:480px;margin:24px auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:18px;padding:28px 24px;text-align:center;box-shadow:0 8px 26px rgba(64,45,25,0.06);">
+      <div style="font-size:11px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:${accent};margin-bottom:8px;">
+        Sunny &middot; Coaster
       </div>
-      <h1 style="font-size:22px;font-weight:900;margin:0 0 10px;">${escapeHtml(params.title)}</h1>
-      <p style="font-size:14px;color:#475569;line-height:1.55;margin:0 0 16px;">${escapeHtml(params.detail)}</p>
-      ${runwayCard}
+      <h1 style="font-size:22px;font-weight:800;margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;">${escapeHtml(params.title)}</h1>
+      <p style="font-size:14px;color:#4A3F35;line-height:1.58;margin:0 0 16px;">${escapeHtml(params.detail)}</p>
+      ${noteCard}
       <div style="margin-top:20px;">
-        <a href="${SITE_URL}" style="display:inline-block;margin:6px;padding:10px 18px;border-radius:10px;background:#0f172a;color:#ffffff;font-size:13px;font-weight:700;text-decoration:none;">Open CFO App</a>
+        ${liveBtn}
         ${secondaryBtn}
+        <a href="${getCoasterSiteUrl()}" style="display:inline-block;margin:6px;padding:10px 18px;border-radius:10px;background:#1F1B18;color:#FFFDF9;font-size:13px;font-weight:700;text-decoration:none;">Open Coaster App</a>
       </div>
     </div>
   </body>
 </html>`;
 }
 
+function formatShortWeekday(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-').map((n) => Number(n));
+  if (!y || !m || !d) return isoDate.slice(5);
+  return new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'UTC' }).format(
+    new Date(Date.UTC(y, m - 1, d)),
+  );
+}
+
 async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise<string> {
-  const { composed, todayFoods, yesterdayFoods, proteinGoal, localDate } =
-    await buildLiveUserOutreach({ uid });
+  const { composed, recentLogs, trend, localDate } = await buildLiveUserOutreach({ uid });
 
-  const totalKcal = Math.round(todayFoods.reduce((s, f) => s + (f.calories || 0), 0));
-  const totalProtein = Math.round(todayFoods.reduce((s, f) => s + (f.proteinG || 0), 0));
-  const totalCarbs = Math.round(todayFoods.reduce((s, f) => s + (f.carbsG || 0), 0));
-  const totalFat = Math.round(todayFoods.reduce((s, f) => s + (f.fatG || 0), 0));
-  const totalPlants = Math.round(todayFoods.reduce((s, f) => s + (f.plantMassG || 0), 0));
+  const series7 = computeDailyTrendSeries(recentLogs, localDate, 7);
+  const maxUnits = Math.max(2, ...series7.map((d) => d.units));
 
-  const proteinPct = Math.min(100, Math.round((totalProtein / Math.max(1, proteinGoal)) * 100));
-  const plantPct = Math.min(100, Math.round((totalPlants / 800) * 100));
+  const barChartHtml = series7
+    .map((pt) => {
+      const pct = pt.units > 0 ? Math.max(10, Math.round((pt.units / maxUnits) * 100)) : 8;
+      const barColor = pt.clearDay
+        ? '#3F7D58'
+        : pt.units > 0
+          ? pt.date === localDate
+            ? '#C26D2D'
+            : '#D99B66'
+          : '#E8DFD1';
+      const valLabel = pt.clearDay ? 'Clear' : pt.units > 0 ? `${pt.units.toFixed(1)}u` : '0u';
+      const isToday = pt.date === localDate;
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0;">
+        <div style="font-size:10px;font-weight:700;color:${pt.clearDay ? '#2E6445' : '#4A3F35'};white-space:nowrap;">${valLabel}</div>
+        <div style="width:100%;max-width:34px;height:86px;background:#F3ECE2;border-radius:8px;display:flex;align-items:flex-end;overflow:hidden;border:1px solid ${isToday ? '#C26D2D' : '#E8DFD1'};">
+          <div style="width:100%;height:${pct}%;background:${barColor};border-radius:6px 6px 0 0;"></div>
+        </div>
+        <div style="font-size:11px;font-weight:${isToday ? '800' : '600'};color:${isToday ? '#9A4E1A' : '#6E6359'};">${formatShortWeekday(pt.date)}</div>
+      </div>`;
+    })
+    .join('');
 
-  const renderFoodRows = (foods: typeof todayFoods, dateIso?: string) => {
-    if (foods.length === 0) {
-      return `<div style="padding:14px;border-radius:12px;background:#f8fafc;color:#64748b;font-size:13px;">No meals logged for this day.</div>`;
+  const quickButtonsSpec: Array<{
+    action: 'log_beer' | 'log_wine' | 'log_cocktail' | 'log_zero_proof' | 'log_clear_day';
+    label: string;
+    primary?: boolean;
+  }> = [
+    { action: 'log_beer', label: '+1.0u Beer', primary: true },
+    { action: 'log_wine', label: '+1.0u Wine' },
+    { action: 'log_cocktail', label: '+1.0u Cocktail/Shot' },
+    { action: 'log_zero_proof', label: '0.0u Zero-Proof Swap' },
+    { action: 'log_clear_day', label: 'Clear Day 0.0u' },
+  ];
+
+  const clickNonce = crypto.randomBytes(4).toString('hex');
+  const quickButtonsHtml = quickButtonsSpec
+    .map((btn) => {
+      const url = `${buildOutreachActionUrl({
+        uid,
+        action: btn.action,
+        date: localDate,
+        nonce: clickNonce,
+      })}&from=coaster`;
+      const isPrimary = btn.primary;
+      const isClear = btn.action === 'log_clear_day';
+      const bg = isPrimary ? '#C26D2D' : isClear ? '#F2F7F4' : '#F3ECE2';
+      const fg = isPrimary ? '#FFFDF9' : isClear ? '#2E6445' : '#1F1B18';
+      const border = isPrimary ? '#C26D2D' : isClear ? '#B7D4C3' : '#DED2C0';
+      return `<a href="${url}" style="display:inline-block;margin:4px 6px 4px 0;padding:10px 14px;border-radius:10px;background:${bg};color:${fg};border:1px solid ${border};font-size:13px;font-weight:700;text-decoration:none;">${escapeHtml(btn.label)}</a>`;
+    })
+    .join('');
+
+  const recentPours = [...recentLogs].slice(-10).reverse();
+  const renderPourRows = (pours: CoasterFoodLogEntry[]) => {
+    if (pours.length === 0) {
+      return `<div style="padding:14px;border-radius:12px;background:#FAF6F0;border:1px solid #E8DFD1;color:#6E6359;font-size:13px;">No pours logged yet &mdash; tap a button above or reply to Sunny anytime.</div>`;
     }
-    return foods
-      .map((f, idx) => {
-        const undoUrl =
-          f.id && dateIso
-            ? buildOutreachActionUrl({
-                uid,
-                action: 'undo_food',
-                date: dateIso,
-                foodId: f.id,
-              })
-            : null;
-        return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:12px;margin-bottom:8px;background:#ffffff;">
+    return pours
+      .map((entry) => {
+        const label = entry.name || entry.foodName || 'Pour';
+        const dateIso = getEntryDateKey(entry) || localDate;
+        const timeStr = entry.consumedAt
+          ? /^\d{4}-\d{2}-\d{2}T/.test(entry.consumedAt)
+            ? entry.consumedAt.slice(11, 16)
+            : entry.consumedAt.slice(0, 5)
+          : '';
+        const units = getEntryUnits(entry);
+        const badgeText = isClearDayEntry(entry)
+          ? 'Clear Day · 0.0u'
+          : isZeroProofEntry(entry)
+            ? 'Zero-Proof · 0.0u'
+            : formatUnits(units);
+        const badgeBg = isClearDayEntry(entry) || isZeroProofEntry(entry) ? '#F2F7F4' : '#FDF5EB';
+        const badgeFg = isClearDayEntry(entry) || isZeroProofEntry(entry) ? '#2E6445' : '#9A4E1A';
+        const undoUrl = entry.id
+          ? `${buildOutreachActionUrl({
+              uid,
+              action: 'undo',
+              date: dateIso,
+              foodId: entry.id,
+            })}&from=coaster`
+          : null;
+
+        return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #E8DFD1;border-radius:12px;margin-bottom:8px;background:#FFFDF9;">
           <div style="min-width:0;flex:1;">
-            <div style="font-size:13px;font-weight:800;color:#0f172a;">#${idx + 1} · ${escapeHtml(f.name)}</div>
-            <div style="font-size:12px;color:#475569;margin-top:2px;">
-              ${escapeHtml(f.consumedAt || 'Logged')} · <strong>${Math.round(f.calories || 0)} kcal</strong> · <strong>${Math.round(f.proteinG || 0)}g protein</strong> · ${Math.round(f.carbsG || 0)}g C · ${Math.round(f.fatG || 0)}g F${f.plantMassG ? ` · ${Math.round(f.plantMassG)}g plants` : ''}
+            <div style="font-size:14px;font-weight:700;color:#1F1B18;">${escapeHtml(label)}</div>
+            <div style="font-size:12px;color:#6E6359;margin-top:3px;">
+              ${escapeHtml(dateIso)}${timeStr ? ` &middot; ${escapeHtml(timeStr)}` : ''}
+              &nbsp;&middot;&nbsp;
+              <span style="display:inline-block;padding:1px 7px;border-radius:999px;background:${badgeBg};color:${badgeFg};font-weight:700;">${escapeHtml(badgeText)}</span>
             </div>
           </div>
           ${
             undoUrl
-              ? `<a href="${undoUrl}" style="flex-shrink:0;padding:6px 11px;border-radius:8px;border:1px solid #fecaca;background:#fef2f2;color:#dc2626;font-size:11px;font-weight:800;text-decoration:none;">Remove</a>`
+              ? `<a href="${undoUrl}" style="flex-shrink:0;padding:6px 11px;border-radius:8px;border:1px solid #E5CFC8;background:#FDF4F2;color:#A13E2D;font-size:11px;font-weight:700;text-decoration:none;">Remove</a>`
               : ''
           }
         </div>`;
@@ -115,7 +207,13 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
   };
 
   const bannerHtml = bannerNotice
-    ? `<div style="background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;padding:10px 14px;border-radius:12px;font-size:13px;font-weight:700;margin-bottom:16px;">${escapeHtml(bannerNotice)}</div>`
+    ? `<div style="background:#F2F7F4;border:1px solid #B7D4C3;color:#2E6445;padding:11px 14px;border-radius:12px;font-size:13px;font-weight:700;margin-bottom:16px;">${escapeHtml(bannerNotice)}</div>`
+    : '';
+
+  const swapHtml = composed.swapSuggestion
+    ? `<div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:#FFFDF9;border:1px solid #E9C89B;font-size:12px;color:#4A3F35;">
+         <strong style="color:#9A4E1A;">Sunny's Zero-Proof Pick:</strong> ${escapeHtml(composed.swapSuggestion)}
+       </div>`
     : '';
 
   return `<!DOCTYPE html>
@@ -123,59 +221,81 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Live Nutrition Ledger — the CFO</title>
+    <title>Live Coaster &amp; Trends &mdash; Sunny &middot; Coaster</title>
   </head>
-  <body style="margin:0;padding:20px 14px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;">
-    <div style="max-width:560px;margin:12px auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;padding:24px 20px;box-shadow:0 8px 24px rgba(15,23,42,0.05);">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="font-size:11px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;color:#059669;">
-          the CFO · Live Personal Ledger
+  <body style="margin:0;padding:20px 12px;background:#FAF6F0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1F1B18;">
+    <div style="max-width:580px;margin:8px auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:20px;padding:22px 20px;box-shadow:0 8px 28px rgba(64,45,25,0.06);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;">
+        <div>
+          <div style="font-size:11px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:#9A4E1A;">
+            Sunny &middot; Coaster &mdash; Zero-Login Ledger
+          </div>
+          <h1 style="margin:4px 0 0;font-size:21px;font-weight:800;font-family:Georgia,'Times New Roman',serif;color:#1F1B18;">Live Coaster &amp; Trends</h1>
         </div>
-        <div style="font-size:11px;font-weight:700;color:#64748b;">${escapeHtml(localDate)}</div>
+        <div style="font-size:12px;font-weight:700;color:#6E6359;">${escapeHtml(localDate)}</div>
       </div>
 
       ${bannerHtml}
 
-      <div style="background:#ecfdf5;border-left:4px solid #10b981;border-radius:12px;padding:14px 16px;margin-bottom:18px;">
-        <div style="font-size:16px;font-weight:900;color:#0f172a;margin-bottom:4px;">${escapeHtml(composed.headline)}</div>
-        <div style="font-size:13px;color:#334155;line-height:1.5;">${escapeHtml(composed.body)}</div>
-      </div>
-
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px;">
-        <div style="border:1px solid #e2e8f0;border-radius:12px;padding:10px 12px;background:#f8fafc;">
-          <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:#64748b;">Protein</div>
-          <div style="font-size:16px;font-weight:900;color:#0f172a;margin:2px 0;">${totalProtein}g <span style="font-size:12px;color:#64748b;font-weight:700;">/ ${proteinGoal}g</span></div>
-          <div style="height:6px;background:#e2e8f0;border-radius:999px;overflow:hidden;"><div style="height:100%;width:${proteinPct}%;background:#10b981;"></div></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;">
+        <div style="border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#FAF6F0;">
+          <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#6E6359;">Today's Units</div>
+          <div style="font-size:22px;font-weight:800;color:#9A4E1A;margin-top:4px;">${formatUnits(trend.todayUnits)}</div>
+          <div style="font-size:11px;color:#6E6359;margin-top:2px;">1.0u = 0.6 fl oz ethanol</div>
         </div>
-        <div style="border:1px solid #e2e8f0;border-radius:12px;padding:10px 12px;background:#f8fafc;">
-          <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:#64748b;">Calories In</div>
-          <div style="font-size:16px;font-weight:900;color:#0f172a;margin:2px 0;">${totalKcal} <span style="font-size:12px;color:#64748b;font-weight:700;">kcal</span></div>
-          <div style="font-size:10px;color:#64748b;">${totalCarbs}g C · ${totalFat}g F</div>
+        <div style="border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#FAF6F0;">
+          <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#6E6359;">7-Day Average</div>
+          <div style="font-size:22px;font-weight:800;color:#1F1B18;margin-top:4px;">${formatUnits(trend.sevenDayAvg)}<span style="font-size:12px;font-weight:600;color:#6E6359;">/day</span></div>
+          <div style="font-size:11px;color:#6E6359;margin-top:2px;">${formatUnits(trend.sevenDayTotal)} total (7d)</div>
         </div>
-        <div style="border:1px solid #e2e8f0;border-radius:12px;padding:10px 12px;background:#f8fafc;">
-          <div style="font-size:10px;font-weight:800;text-transform:uppercase;color:#64748b;">Plants (800g)</div>
-          <div style="font-size:16px;font-weight:900;color:#0f172a;margin:2px 0;">${totalPlants}g <span style="font-size:12px;color:#64748b;font-weight:700;">/ 800g</span></div>
-          <div style="height:6px;background:#e2e8f0;border-radius:999px;overflow:hidden;"><div style="height:100%;width:${plantPct}%;background:#059669;"></div></div>
+        <div style="border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#F2F7F4;">
+          <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#2E6445;">30-Day Totals</div>
+          <div style="font-size:22px;font-weight:800;color:#2E6445;margin-top:4px;">${trend.clearDaysLast30} <span style="font-size:12px;font-weight:700;">clear</span></div>
+          <div style="font-size:11px;color:#4A5D52;margin-top:2px;">${formatUnits(trend.thirtyDayTotal)} across 30d</div>
         </div>
       </div>
 
-      <h2 style="font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:0.06em;color:#334155;margin:18px 0 8px;">
-        Today's Logged Meals (${todayFoods.length})
-      </h2>
-      ${renderFoodRows(todayFoods, localDate)}
+      <div style="border:1px solid #E8DFD1;border-radius:14px;padding:14px 16px;background:#FAF6F0;margin-bottom:18px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#4A3F35;">7-Day Rolling Rhythm</div>
+          <div style="font-size:12px;color:#6E6359;">Avg ${formatUnits(trend.sevenDayAvg)}/day</div>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:6px;">
+          ${barChartHtml}
+        </div>
+      </div>
 
-      <h2 style="font-size:13px;font-weight:900;text-transform:uppercase;letter-spacing:0.06em;color:#64748b;margin:20px 0 8px;">
-        Yesterday's Logged Meals (${yesterdayFoods.length})
-      </h2>
-      ${renderFoodRows(yesterdayFoods)}
+      <div style="background:#FDF5EB;border:1px solid #E9C89B;border-radius:14px;padding:14px 16px;margin-bottom:18px;">
+        <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.07em;color:#9A4E1A;margin-bottom:4px;">Sunny's Note</div>
+        <div style="font-size:15px;font-weight:800;color:#1F1B18;margin-bottom:4px;">${escapeHtml(composed.headline)}</div>
+        <div style="font-size:13px;color:#4A3F35;line-height:1.55;">${escapeHtml(composed.body)}</div>
+        ${swapHtml}
+      </div>
 
-      <div style="margin-top:22px;padding-top:14px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#64748b;">
-        <span>Reply in Discord or Email to add or remove items</span>
-        <a href="${SITE_URL}" style="color:#0f172a;font-weight:800;text-decoration:none;">Open Full App →</a>
+      <div style="margin-bottom:20px;">
+        <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.07em;color:#6E6359;margin-bottom:8px;">1-Tap Quick Log</div>
+        <div>${quickButtonsHtml}</div>
+      </div>
+
+      <h2 style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.07em;color:#4A3F35;margin:16px 0 8px;">
+        Recent Pours &amp; Check-Ins (${recentPours.length})
+      </h2>
+      ${renderPourRows(recentPours)}
+
+      <div style="margin-top:20px;padding-top:14px;border-top:1px solid #E8DFD1;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#6E6359;gap:10px;">
+        <span>Reply to your Sunny · Coaster email anytime with text or a photo</span>
+        <a href="${getCoasterSiteUrl()}" style="color:#9A4E1A;font-weight:800;text-decoration:none;white-space:nowrap;">Open Full App &rarr;</a>
       </div>
     </div>
   </body>
 </html>`;
+}
+
+function getActionTokenParam(request: NextRequest): string | null {
+  return (
+    request.nextUrl.searchParams.get('token') ||
+    request.nextUrl.searchParams.get('t')
+  );
 }
 
 export async function HEAD() {
@@ -183,7 +303,7 @@ export async function HEAD() {
 }
 
 export async function POST(request: NextRequest) {
-  const token = request.nextUrl.searchParams.get('token');
+  const token = getActionTokenParam(request);
   const verified = verifyOutreachToken(token);
   if (!verified) {
     return NextResponse.json({ error: 'Invalid or expired token' }, { status: 400 });
@@ -195,20 +315,23 @@ export async function POST(request: NextRequest) {
     date: verified.date,
     window: verified.window,
     foodId: verified.foodId,
+    cadence: verified.cadence,
+    nonce: verified.nonce,
   });
 
   return NextResponse.json({ ok: true, ...result });
 }
 
 export async function GET(request: NextRequest) {
-  const token = request.nextUrl.searchParams.get('token');
+  const token = getActionTokenParam(request);
   const verified = verifyOutreachToken(token);
 
   if (!verified) {
     return new NextResponse(
       renderConfirmationPage({
         title: 'Link Expired or Invalid',
-        detail: 'This quick-action link has expired. Open CFO Fitness to update your ledger or preferences.',
+        detail:
+          'This Coaster link has expired. Open the Coaster app or reply to your latest Sunny email to get a fresh link.',
         isError: true,
       }),
       { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
@@ -216,6 +339,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const isFromLiveCoaster = request.nextUrl.searchParams.get('from') === 'coaster';
+
     if (verified.action === 'view_ledger') {
       const html = await renderLiveLedgerPage(verified.uid);
       return new NextResponse(html, {
@@ -230,35 +355,47 @@ export async function GET(request: NextRequest) {
       date: verified.date,
       window: verified.window,
       foodId: verified.foodId,
+      cadence: verified.cadence,
+      nonce: verified.nonce,
     });
 
-    if (verified.action === 'undo_food') {
-      const html = await renderLiveLedgerPage(
-        verified.uid,
-        'Removed meal entry — your live ledger and Eat-By clock have been updated.',
-      );
+    if (
+      verified.action === 'undo' ||
+      verified.action === 'undo_food' ||
+      isFromLiveCoaster
+    ) {
+      const html = await renderLiveLedgerPage(verified.uid, result.detail);
       return new NextResponse(html, {
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
       });
     }
 
+    const liveCoasterUrl = buildOutreachActionUrl({
+      uid: verified.uid,
+      action: 'view_ledger',
+    });
+
     let secondaryActionLabel: string | undefined;
     let secondaryActionUrl: string | undefined;
 
     if (result.loggedFoodId) {
-      secondaryActionLabel = 'Undo Meal Entry';
+      secondaryActionLabel = 'Undo Entry';
       secondaryActionUrl = buildOutreachActionUrl({
         uid: verified.uid,
-        action: 'undo_food',
+        action: 'undo',
         date: verified.date,
         foodId: result.loggedFoodId,
       });
-    } else if (verified.action === 'unsubscribe' || verified.action === 'pause_7d') {
-      secondaryActionLabel = 'Re-Enable 3x/Day Briefings';
+    } else if (
+      verified.action === 'unsubscribe' ||
+      verified.action === 'pause' ||
+      verified.action === 'pause_7d'
+    ) {
+      secondaryActionLabel = 'Resume Check-Ins';
       secondaryActionUrl = buildOutreachActionUrl({
         uid: verified.uid,
-        action: 'resume_3x',
+        action: 'resume',
       });
     }
 
@@ -268,17 +405,19 @@ export async function GET(request: NextRequest) {
         detail: result.detail,
         updatedHeadline: result.updatedHeadline,
         updatedBody: result.updatedBody,
+        liveCoasterUrl,
         secondaryActionLabel,
         secondaryActionUrl,
       }),
       { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[OutreachAction] Error executing quick action:', err);
     return new NextResponse(
       renderConfirmationPage({
-        title: 'Could Not Process Action',
-        detail: 'Something went wrong while updating your ledger. Please try again in the app.',
+        title: 'Could Not Update Coaster',
+        detail:
+          'Something hiccuped while updating your coaster. Please try again in a moment.',
         isError: true,
       }),
       { status: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' } },

@@ -4,6 +4,7 @@ import { ai, CFO_LITE_MODEL } from '@/ai/genkit';
 import { z } from 'genkit';
 import { getAdminFirestore } from '@/firebase/admin';
 import { adminHealthService as healthService } from '@/lib/health-service-admin';
+import { formatUnits, getEntryUnits, isClearDayEntry, isZeroProofEntry } from '@/lib/health-service';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { trackAiUsage } from '@/lib/ai-usage';
 import type { SharedMealItem } from '@/lib/food-exercise-types';
@@ -11,7 +12,9 @@ import type { SharedMealItem } from '@/lib/food-exercise-types';
 const AssessmentSchema = z.object({
   assessment: z
     .string()
-    .describe('A playful, honest 2-3 sentence take on the meal that ends with a warm, low-pressure invite to try the CFO.'),
+    .describe(
+      'A warm, playful 2-3 sentence greeting from Sunny (Coaster booth-buddy) that ends with a low-pressure invite to explore Coaster.',
+    ),
 });
 
 export type WelcomeAssessmentResult =
@@ -19,20 +22,21 @@ export type WelcomeAssessmentResult =
   | { success: false; error: string };
 
 interface MealSummary {
-  /** Required: cached on the share document so each shared meal only generates once. */
+  /** Required: cached on the share document so each shared entry only generates once. */
   shareId?: string;
   title: string;
   createdByName?: string;
   totals: { calories: number; proteinG: number; carbsG: number; fatG: number; fiberG: number };
-  items: Pick<SharedMealItem, 'name' | 'calories' | 'proteinG' | 'carbsG' | 'fatG'>[];
+  items: (Pick<SharedMealItem, 'name' | 'calories' | 'proteinG' | 'carbsG' | 'fatG' | 'alcoholDrinks'> & {
+    standardUnits?: number;
+    isZeroProof?: boolean;
+    isClearDay?: boolean;
+  })[];
 }
 
 /**
- * The "welcome CFO" greeting on a shared-meal landing page.
- * Guarded against unauthenticated bot abuse:
- *   1. Checks Firestore for an existing cached `cfoAssessment` first (0 LLM cost on repeat views).
- *   2. Applies rate limiting per shareId/public bucket.
- *   3. Uses `gemini-2.5-flash-lite` (72% lower token cost).
+ * Sunny's welcome note on a shared-coaster link (`/m/[shareId]`).
+ * Cached on the share document so repeat page views cost zero LLM tokens.
  */
 export async function assessSharedMeal(meal: MealSummary): Promise<WelcomeAssessmentResult> {
   try {
@@ -41,7 +45,7 @@ export async function assessSharedMeal(meal: MealSummary): Promise<WelcomeAssess
     if (meal.shareId) {
       const existingShare = await healthService.getSharedMeal(db, meal.shareId);
       if (!existingShare || existingShare.revoked) {
-        return { success: false, error: 'Shared meal not found.' };
+        return { success: false, error: 'Shared coaster not found.' };
       }
       if (existingShare.cfoAssessment) {
         return { success: true, assessment: existingShare.cfoAssessment };
@@ -53,27 +57,41 @@ export async function assessSharedMeal(meal: MealSummary): Promise<WelcomeAssess
       return { success: false, error: 'Rate limit reached.' };
     }
 
-    const { totals, items, title, createdByName } = meal;
+    const { items, title, createdByName } = meal;
+    const totalUnits =
+      Math.round((items || []).reduce((sum, item) => sum + getEntryUnits(item), 0) * 10) / 10;
+
     const itemList = (items || [])
       .slice(0, 15)
-      .map(i => `${String(i.name).slice(0, 80)} (${Math.round(i.calories)} cal, ${Math.round(i.proteinG)}g protein)`)
+      .map((i) => {
+        if (isClearDayEntry(i)) return `${String(i.name).slice(0, 80)} (Clear Day · 0.0u)`;
+        if (isZeroProofEntry(i)) return `${String(i.name).slice(0, 80)} (Zero-Proof · 0.0u)`;
+        const units = getEntryUnits(i);
+        return `${String(i.name).slice(0, 80)} (${formatUnits(units)})`;
+      })
       .join(', ');
 
     const { output } = await ai.generate({
       model: CFO_LITE_MODEL,
       output: { schema: AssessmentSchema },
-      use: [trackAiUsage({ uid: 'public:welcome_assessment', feature: 'welcome_assessment', model: CFO_LITE_MODEL })],
-      prompt: `You are "the CFO" — a warm, witty health coach who talks about food like a financial portfolio (protein = assets, calories = budget, fiber/plants = long-term holdings). ${createdByName ? `${String(createdByName).slice(0, 50)} just shared this meal` : 'Someone just shared this meal'} with a friend, who has NEVER used the app and just opened the link. You are greeting that friend.
+      use: [
+        trackAiUsage({
+          uid: 'public:welcome_assessment',
+          feature: 'welcome_assessment',
+          model: CFO_LITE_MODEL,
+        }),
+      ],
+      prompt: `You are Sunny ("Sunny · Coaster") — a warm, friendly, non-drinking booth-buddy who loves a clean paper coaster, sparkling yuzu, and honest Standard Drink Unit math without any judgment or lectures.
+${createdByName ? `${String(createdByName).slice(0, 50)} just shared this coaster` : 'Someone just shared this coaster'} with a friend who has never tried Coaster before.
 
-Meal: "${String(title).slice(0, 100)}"
+Shared title: "${String(title).slice(0, 100)}"
 Items: ${itemList || 'n/a'}
-Totals: ${Math.round(totals.calories)} cal, ${Math.round(totals.proteinG)}g protein, ${Math.round(totals.carbsG)}g carbs, ${Math.round(totals.fatG)}g fat, ${Math.round(totals.fiberG)}g fiber
+Total Standard Drink Units: ${formatUnits(totalUnits)} (where 1.0u = 12oz 5% beer / 5oz 12% wine / 1.5oz 40% spirit)
 
-Write a short greeting (2-3 sentences, max ~45 words) that:
-- Opens with a PLAYFUL, HONEST one-liner about this specific meal's macros. Be genuinely honest — if protein is strong, celebrate it; if it's a treat/indulgent, tease it warmly. Use a light financial metaphor, but at most one — don't overdo the jargon.
-- NEVER scold, shame, or moralize. No "you should", no calorie panic, no fitness-bro intensity. A new person should feel welcomed, not judged.
-- Ends with a warm, genuinely low-pressure invite to try the CFO — something like "want to see how a meal like this scores your day, or just look around?" Make clear there's zero obligation.
-- Sounds like a clever friend, not a brand. No emoji spam (one is fine), no hashtags, no exclamation overload.
+Write a warm, conversational greeting (2-3 sentences, max ~45 words):
+- Open with a light, playful note on the drink(s) — you can gently tease pretentious tasting notes, wild craft beer names, or giant martini glasses, OR give a crisp high-five for zero-proof / Clear Day picks.
+- NEVER scold, score, moralize, or joke about someone drinking too much or getting drunk.
+- End with a genuinely zero-pressure invitation to explore Coaster (e.g., "want to see how easy it is to keep a relaxed tally and spot your 30-day rhythm, or just look around?").
 
 Return only the greeting text.`,
     });
@@ -86,8 +104,9 @@ Return only the greeting text.`,
     }
 
     return { success: true, assessment };
-  } catch (err: any) {
-    console.error('[WelcomeAssessment] error:', err?.message ?? String(err));
-    return { success: false, error: err?.message ?? 'Could not generate assessment.' };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[WelcomeAssessment] error:', msg);
+    return { success: false, error: msg || 'Could not generate greeting.' };
   }
 }
