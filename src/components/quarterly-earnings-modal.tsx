@@ -3,12 +3,13 @@
 import React, { useState } from 'react';
 import { doc } from 'firebase/firestore';
 import {
-  AlertTriangle,
-  ArrowUpRight,
-  BarChart3,
+  Sparkles,
+  Leaf,
   Loader2,
   RefreshCw,
-  TrendingUp,
+  GlassWater,
+  CalendarDays,
+  Compass,
 } from 'lucide-react';
 import {
   Dialog,
@@ -30,38 +31,33 @@ import {
   SecComplianceAlertPanel,
 } from '@/components/execution-receipt-badge';
 import {
-  runQuarterlyEarningsCallHybrid,
+  runTrendReflectionWithFallback,
   SecPrivacyLockBlockedError,
-  type QuarterlyEarningsCallResult,
+  type HybridExecutionReceipt,
   type SecComplianceAlert,
 } from '@/lib/hybrid-ai';
+import { computeTrendSummary, formatUnits, type TrendSummary } from '@/lib/drink-units';
 import {
   healthService,
   type HealthData,
   type UserPreferences,
 } from '@/lib/health-service';
-import { cn } from '@/lib/utils';
 
-function ratingBadgeStyle(
-  rating: QuarterlyEarningsCallResult['marketRating']
-): string {
-  switch (rating) {
-    case 'STRONG_BUY':
-      return 'border-emerald-400 bg-emerald-500/20 text-emerald-300';
-    case 'OUTPERFORM':
-      return 'border-cyan-400 bg-cyan-500/20 text-cyan-300';
-    case 'HOLD':
-      return 'border-amber-400 bg-amber-500/20 text-amber-300';
-    case 'UNDERPERFORM':
-    case 'MARGIN_CALL':
-      return 'border-rose-400 bg-rose-500/20 text-rose-300';
-  }
+interface TrendSpotterReport {
+  headline: string;
+  rhythmInsight: string;
+  clearDayHighlight: string;
+  mixBreakdown: string;
+  swapIdeas: string[];
+  nextWeekNudge: string;
+  receipt: HybridExecutionReceipt;
 }
 
 /**
- * Feature D — "Quarterly Earnings Call" Deep Portfolio Forecast Modal (`InferenceMode.PREFER_IN_CLOUD`).
- * Intentionally routes upward to Cloud Gemini (configured dynamically via Firebase Remote Config)
- * for multi-week Audit Ledger synthesis while falling back to on-device Gemini Nano if offline.
+ * Sunny's 30-Day Trend Spotter Modal (`InferenceMode.PREFER_IN_CLOUD`).
+ * Uses Cloud Gemini via Firebase Remote Config for multi-week rhythm synthesis
+ * and zero-proof ideas, with downward fallback to Chrome Gemini Nano offline,
+ * or strict on-device execution when Privacy Vault (`ONLY_ON_DEVICE`) is active.
  */
 export function QuarterlyEarningsModal() {
   const firebaseApp = useFirebaseApp();
@@ -91,33 +87,68 @@ export function QuarterlyEarningsModal() {
   const { data: preferences } = useDoc<UserPreferences>(prefsDocRef);
 
   const [isRunning, setIsRunning] = useState(false);
-  const [report, setReport] = useState<QuarterlyEarningsCallResult | null>(null);
+  const [report, setReport] = useState<TrendSpotterReport | null>(null);
+  const [summaryStats, setSummaryStats] = useState<TrendSummary | null>(null);
   const [complianceAlert, setComplianceAlert] = useState<SecComplianceAlert | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
 
-  // Triggered strictly inside user button click handler
-  const handleRunEarningsCall = async () => {
+  const handleRunTrendSpotter = async () => {
     if (!user) return;
     setIsRunning(true);
     setErrorText(null);
     setComplianceAlert(null);
 
     try {
-      const [recentFoodLogs, recentExerciseLogs] = await Promise.all([
-        healthService.queryFoodLog(db, user.uid, undefined, 25).catch(() => []),
-        healthService.queryExerciseLog(db, user.uid, undefined, 15).catch(() => []),
-      ]);
+      const recentLogs = await healthService
+        .queryFoodLog(db, user.uid, undefined, 90)
+        .catch(() => []);
 
-      const result = await runQuarterlyEarningsCallHybrid({
+      const stats = computeTrendSummary(recentLogs);
+      setSummaryStats(stats);
+
+      const rawResult = (await runTrendReflectionWithFallback({
         firebaseApp,
-        healthData,
-        preferences,
-        recentFoodLogs,
-        recentExerciseLogs,
+        logs: recentLogs,
         secPrivacyLock,
-      });
-      setReport(result);
-      recordReceipt(result.receipt);
+      })) as Partial<TrendSpotterReport> & {
+        executiveSummary?: string;
+        capitalDirectives?: string[];
+        receipt: HybridExecutionReceipt;
+      };
+
+      const normalizedReport: TrendSpotterReport = {
+        headline:
+          rawResult.headline || "Sunny's 30-Day Coaster Snapshot",
+        rhythmInsight:
+          rawResult.rhythmInsight ||
+          rawResult.executiveSummary ||
+          `You averaged ${formatUnits(stats.sevenDayAvg)}/day over the last week and tallied ${formatUnits(stats.thirtyDayTotal)} across the last 30 days.`,
+        clearDayHighlight:
+          rawResult.clearDayHighlight ||
+          `You noticed ${stats.clearDaysLast30} Clear Day${stats.clearDaysLast30 === 1 ? '' : 's'} and ${stats.zeroProofSwapsLast30} Zero-Proof Swap${stats.zeroProofSwapsLast30 === 1 ? '' : 's'} in the past month.`,
+        mixBreakdown:
+          rawResult.mixBreakdown ||
+          'Across beer, wine, cocktails, and zero-proof pours, noticing your baseline is the clearest step.',
+        swapIdeas:
+          Array.isArray(rawResult.swapIdeas) && rawResult.swapIdeas.length > 0
+            ? rawResult.swapIdeas.slice(0, 4)
+            : Array.isArray(rawResult.capitalDirectives) && rawResult.capitalDirectives.length > 0
+              ? rawResult.capitalDirectives.slice(0, 4)
+              : [
+                  'Sparkling yuzu over crushed ice with a twist of rosemary',
+                  'Chilled Phony Negroni or bitter blood-orange apéritif spritz',
+                  'Hop-infused sparkling water in a frosty pint glass on weeknights',
+                ],
+        nextWeekNudge:
+          rawResult.nextWeekNudge ||
+          'Pick one weeknight evening to trade your usual pour for something sparkling and tart, and log whatever actually happens without fuss.',
+        receipt: rawResult.receipt,
+      };
+
+      setReport(normalizedReport);
+      if (normalizedReport.receipt) {
+        recordReceipt(normalizedReport.receipt);
+      }
     } catch (err) {
       if (err instanceof SecPrivacyLockBlockedError) {
         setComplianceAlert(err.alert);
@@ -125,7 +156,7 @@ export function QuarterlyEarningsModal() {
         setErrorText(
           err instanceof Error
             ? err.message
-            : 'Unable to synthesize 30-day portfolio forecast right now.'
+            : 'Unable to synthesize your 30-day Coaster reflection right now.'
         );
       }
     } finally {
@@ -135,51 +166,55 @@ export function QuarterlyEarningsModal() {
 
   return (
     <Dialog open={earningsModalOpen} onOpenChange={setEarningsModalOpen}>
-      <DialogContent className="w-[calc(100vw-1.25rem)] sm:w-full max-w-2xl rounded-2xl bg-slate-950 border-emerald-500/40 text-emerald-200 font-mono p-0 overflow-hidden max-h-[88dvh] flex flex-col">
-        <DialogHeader className="border-b border-emerald-500/25 bg-slate-900 px-3.5 sm:px-5 py-3 sm:py-4 space-y-1 shrink-0 text-left">
-          <div className="flex flex-wrap items-center justify-between gap-1.5 pr-6">
-            <DialogTitle className="text-xs sm:text-sm font-black uppercase tracking-wider sm:tracking-widest text-emerald-300 flex items-center gap-1.5">
-              <BarChart3 className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>30-DAY METABOLIC EARNINGS CALL</span>
+      <DialogContent className="w-[calc(100vw-1.25rem)] sm:w-full max-w-2xl rounded-3xl bg-[#FFFDF9] border border-[#E8DFD1] text-[#1F1B18] p-0 overflow-hidden max-h-[88dvh] flex flex-col shadow-2xl">
+        <DialogHeader className="border-b border-[#E8DFD1] bg-[#FAF6F0] px-4 sm:px-6 py-4 space-y-1 shrink-0 text-left">
+          <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
+            <DialogTitle className="text-base sm:text-lg font-semibold text-[#1F1B18] flex items-center gap-2 font-['Newsreader',Georgia,serif]">
+              <Sparkles className="w-4 h-4 text-[#C26D2D] shrink-0" />
+              <span>Sunny&apos;s 30-Day Trend Spotter</span>
             </DialogTitle>
-            <span className="rounded border border-amber-500/40 bg-amber-950/40 px-1.5 py-0.5 text-[8.5px] sm:text-[9px] font-bold uppercase text-amber-300">
-              {secPrivacyLock ? 'ONLY_ON_DEVICE' : `CLOUD · ${remoteConfig.cfoCloudModel}`}
+            <span className="rounded-md border border-[#E8DFD1] bg-[#FFFDF9] px-2 py-0.5 font-mono text-[10px] font-semibold uppercase text-[#6E6359]">
+              {secPrivacyLock ? 'ONLY_ON_DEVICE' : `PREFER_IN_CLOUD · ${remoteConfig.cfoCloudModel}`}
             </span>
           </div>
-          <DialogDescription className="text-[10.5px] sm:text-[11px] text-emerald-400/80 font-mono">
-            Synthesizes your multi-week Audit Ledger, Equity trajectory, Alpert ceiling, and metabolic break-even run-rate.
-            {!isOnline && ' (Offline: automatic on-device Gemini Nano fallback armed.)'}
+          <DialogDescription className="text-xs text-[#6E6359]">
+            Spot gentle weekly rhythms, clear-day milestones, drink mix patterns, and zero-proof
+            swaps tailored to what you enjoy.
+            {!isOnline && ' (Offline: Chrome Gemini Nano fallback armed.)'}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="p-3.5 sm:p-5 overflow-y-auto space-y-3.5 sm:space-y-4">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-4">
           {!report && !isRunning && !complianceAlert && (
-            <div className="rounded-xl border border-emerald-500/30 bg-slate-900/70 p-5 text-center space-y-3">
-              <TrendingUp className="w-8 h-8 text-amber-400 mx-auto" />
-              <p className="text-xs text-emerald-100 font-bold uppercase tracking-wider">
-                Ready to Convene 30-Day Portfolio Audit
+            <div className="rounded-2xl border border-[#E8DFD1] bg-[#FAF6F0] p-6 text-center space-y-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] flex items-center justify-center mx-auto shadow-xs">
+                <Compass className="w-6 h-6 text-[#C26D2D]" />
+              </div>
+              <p className="text-base font-semibold text-[#1F1B18] font-['Newsreader',Georgia,serif]">
+                Pull up a seat with Sunny
               </p>
-              <p className="text-[11px] text-emerald-300/80 max-w-md mx-auto leading-relaxed">
-                Uses <code className="text-amber-300">InferenceMode.PREFER_IN_CLOUD</code> via{' '}
-                <code className="text-amber-300">{remoteConfig.cfoCloudModel}</code> for deep multi-week ledger reasoning, with automatic downward fallback to Chrome Gemini Nano when offline.
+              <p className="text-xs sm:text-sm text-[#6E6359] max-w-md mx-auto leading-relaxed">
+                Uses <code className="font-mono text-[#C26D2D]">InferenceMode.PREFER_IN_CLOUD</code>{' '}
+                via <code className="font-mono text-[#1F1B18]">{remoteConfig.cfoCloudModel}</code>{' '}
+                for 30-day synthesis—or runs strictly on-device when Privacy Vault is turned on.
               </p>
               <button
                 type="button"
-                onClick={handleRunEarningsCall}
+                onClick={handleRunTrendSpotter}
                 data-testid="execute-earnings-call-btn"
-                className="inline-flex items-center gap-2 rounded-lg border border-amber-400 bg-amber-400 text-slate-950 hover:bg-amber-300 px-4 py-2 text-xs font-black uppercase tracking-wider transition-colors"
+                className="inline-flex items-center gap-2 rounded-xl bg-[#C26D2D] hover:bg-[#A85B22] text-[#FFFDF9] px-5 py-2.5 text-xs sm:text-sm font-semibold shadow-sm transition-colors"
               >
-                <BarChart3 className="w-4 h-4" />
-                RUN 30-DAY EARNINGS CALL
+                <Sparkles className="w-4 h-4" />
+                Spot My 30-Day Trends
               </button>
             </div>
           )}
 
           {isRunning && (
-            <div className="rounded-xl border border-emerald-500/30 bg-slate-900/60 p-8 flex flex-col items-center justify-center space-y-3">
-              <Loader2 className="w-7 h-7 animate-spin text-amber-400" />
-              <p className="text-xs font-bold uppercase tracking-widest text-amber-300">
-                Auditing Multi-Week Ledger &amp; Equity Trajectory...
+            <div className="rounded-2xl border border-[#E8DFD1] bg-[#FAF6F0] p-8 flex flex-col items-center justify-center space-y-3">
+              <Loader2 className="w-7 h-7 animate-spin text-[#C26D2D]" />
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#6E6359]">
+                Sunny is looking over your last 30 days...
               </p>
             </div>
           )}
@@ -196,93 +231,125 @@ export function QuarterlyEarningsModal() {
           )}
 
           {errorText && (
-            <div className="rounded border border-rose-500/50 bg-rose-950/50 px-3.5 py-2.5 text-xs text-rose-300">
-              [EARNINGS CALL ERROR] {errorText}
+            <div className="rounded-xl border border-[#C26D2D]/40 bg-[#FEF3C7]/45 px-4 py-3 text-xs text-[#9A4E16]">
+              {errorText}
             </div>
           )}
 
           {report && (
             <div data-testid="earnings-call-report" className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <ExecutionReceiptBadge
-                  inferenceSource={report.receipt.inferenceSource}
-                  latencyMs={report.receipt.latencyMs}
-                />
-                <span
-                  className={cn(
-                    'rounded border px-2.5 py-0.5 text-[11px] font-black uppercase tracking-widest',
-                    ratingBadgeStyle(report.marketRating)
-                  )}
-                >
-                  RATING: {report.marketRating.replace('_', ' ')}
-                </span>
+                {report.receipt && (
+                  <ExecutionReceiptBadge
+                    inferenceSource={report.receipt.inferenceSource}
+                    latencyMs={report.receipt.latencyMs}
+                  />
+                )}
+                {summaryStats && (
+                  <span className="text-[11px] font-mono text-[#6E6359]">
+                    30d Total: {formatUnits(summaryStats.thirtyDayTotal)} · 7d Avg:{' '}
+                    {formatUnits(summaryStats.sevenDayAvg)}/day
+                  </span>
+                )}
               </div>
 
-              <div className="rounded-xl border border-emerald-500/30 bg-slate-900/90 p-4 space-y-2">
-                <h3 className="text-sm font-bold text-amber-300 uppercase tracking-wide">
+              {summaryStats && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-[#6E6359] font-semibold">
+                      30-Day Units
+                    </p>
+                    <p className="text-lg font-semibold text-[#1F1B18] font-mono mt-0.5">
+                      {formatUnits(summaryStats.thirtyDayTotal)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-[#6E6359] font-semibold">
+                      7-Day Daily Avg
+                    </p>
+                    <p className="text-lg font-semibold text-[#C26D2D] font-mono mt-0.5">
+                      {formatUnits(summaryStats.sevenDayAvg)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-[#3F7D58]/30 bg-[#EAF3ED]/75 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-[#2B5C3F] font-semibold">
+                      Clear Days (30d)
+                    </p>
+                    <p className="text-lg font-semibold text-[#2B5C3F] font-mono mt-0.5">
+                      {summaryStats.clearDaysLast30}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-[#3F7D58]/30 bg-[#EAF3ED]/75 p-3">
+                    <p className="text-[10px] uppercase tracking-wider text-[#2B5C3F] font-semibold">
+                      Zero-Proof Swaps
+                    </p>
+                    <p className="text-lg font-semibold text-[#2B5C3F] font-mono mt-0.5">
+                      {summaryStats.zeroProofSwapsLast30}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-[#E8DFD1] bg-[#FAF6F0] p-4 space-y-2">
+                <h3 className="text-base font-semibold text-[#1F1B18] font-['Newsreader',Georgia,serif]">
                   {report.headline}
                 </h3>
-                <p className="text-xs text-emerald-100/95 leading-relaxed">
-                  {report.executiveSummary}
+                <p className="text-xs sm:text-sm text-[#4A4139] leading-relaxed">
+                  {report.rhythmInsight}
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="rounded-lg border border-emerald-500/30 bg-black/60 p-3">
-                  <p className="text-[10px] uppercase tracking-wider text-emerald-500">
-                    30-Day Equity Trajectory
+                <div className="rounded-xl border border-[#3F7D58]/30 bg-[#EAF3ED]/75 p-3.5 space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-[#2B5C3F] flex items-center gap-1.5">
+                    <Leaf className="w-3.5 h-3.5" />
+                    Clear Days &amp; Milestones
                   </p>
-                  <p className="text-lg font-black text-emerald-300 mt-0.5">
-                    {report.projected30dEquityDelta >= 0 ? '+' : ''}
-                    {report.projected30dEquityDelta} VF PTS
+                  <p className="text-xs text-[#1F1B18] leading-relaxed">
+                    {report.clearDayHighlight}
                   </p>
                 </div>
-                <div className="rounded-lg border border-amber-500/30 bg-black/60 p-3">
-                  <p className="text-[10px] uppercase tracking-wider text-amber-500">
-                    Metabolic Break-Even Ceiling
+
+                <div className="rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] p-3.5 space-y-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-[#C26D2D] flex items-center gap-1.5">
+                    <CalendarDays className="w-3.5 h-3.5" />
+                    Pour &amp; Beverage Mix
                   </p>
-                  <p className="text-lg font-black text-amber-300 mt-0.5">
-                    {report.metabolicBreakEvenKcal.toLocaleString()} kcal / day
+                  <p className="text-xs text-[#4A4139] leading-relaxed">
+                    {report.mixBreakdown}
                   </p>
                 </div>
               </div>
 
-              <div className="rounded-lg border border-emerald-500/25 bg-slate-900/70 p-3.5 space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-400 flex items-center gap-1.5">
-                  <ArrowUpRight className="w-3.5 h-3.5" />
-                  Capital Allocation Directives (Next 30 Days)
+              <div className="rounded-xl border border-[#E8DFD1] bg-[#FFFDF9] p-4 space-y-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-[#3F7D58] flex items-center gap-1.5">
+                  <GlassWater className="w-3.5 h-3.5" />
+                  Zero-Proof &amp; Lower-ABV Ideas From Sunny
                 </p>
-                <ul className="space-y-1.5 text-xs text-emerald-100">
-                  {report.capitalDirectives.map((d, i) => (
+                <ul className="space-y-1.5 text-xs sm:text-sm text-[#1F1B18]">
+                  {report.swapIdeas.map((idea, i) => (
                     <li key={i} className="flex items-start gap-2">
-                      <span className="text-emerald-400 font-bold">0{i + 1}.</span>
-                      <span>{d}</span>
+                      <span className="text-[#3F7D58] font-mono font-semibold">0{i + 1}.</span>
+                      <span>{idea}</span>
                     </li>
                   ))}
                 </ul>
               </div>
 
-              <div className="rounded-lg border border-rose-500/25 bg-rose-950/20 p-3.5 space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-rose-300 flex items-center gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
-                  Balance-Sheet Liability Risks
-                </p>
-                <ul className="space-y-1 text-xs text-rose-200/90">
-                  {report.liabilityRisks.map((r, i) => (
-                    <li key={i}>• {r}</li>
-                  ))}
-                </ul>
+              <div className="rounded-xl border border-[#D97706]/30 bg-[#FEF3C7]/40 px-4 py-3 text-xs text-[#4A4139] leading-relaxed">
+                <strong className="text-[#9A4E16]">Sunny&apos;s gentle thought for next week:</strong>{' '}
+                {report.nextWeekNudge}
               </div>
 
               <div className="flex justify-end pt-1">
                 <button
                   type="button"
-                  onClick={handleRunEarningsCall}
+                  onClick={handleRunTrendSpotter}
                   disabled={isRunning}
-                  className="inline-flex items-center gap-1.5 rounded border border-emerald-500/40 bg-emerald-950/50 hover:bg-emerald-900/50 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] hover:bg-[#F3ECE1] px-3.5 py-2 text-xs font-semibold text-[#1F1B18]"
                 >
-                  <RefreshCw className="w-3 h-3" />
-                  Re-Run Forecast
+                  <RefreshCw className="w-3.5 h-3.5 text-[#C26D2D]" />
+                  Refresh 30D Reflection
                 </button>
               </div>
             </div>

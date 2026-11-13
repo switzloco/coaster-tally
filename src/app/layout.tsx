@@ -10,13 +10,14 @@ import { SITE_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: 'the CFO | Chief Fitness Officer',
-  description: 'Manage your body like a high-stakes financial portfolio.',
+  title: 'Coaster — Mindful Drink Tally & Trend Buddy',
+  description:
+    'Count pours in NIAAA Standard Drink Units, notice clear evenings, and explore weekly drink trends with Sunny, your non-judgmental booth-buddy powered by Hybrid AI (#BuildHybridAI).',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'the CFO',
+    title: 'Coaster',
   },
   icons: {
     icon: [
@@ -31,7 +32,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#3F51B5',
+  themeColor: '#C26D2D',
 };
 
 export default function RootLayout({
@@ -53,25 +54,25 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap"
           rel="stylesheet"
         />
       </head>
-      <body className="font-body antialiased bg-background text-foreground min-h-[100dvh] flex flex-col">
+      <body className="font-body antialiased bg-[#FAF6F0] text-[#1F1B18] min-h-[100dvh] flex flex-col">
         <FirebaseClientProvider>
           {children}
         </FirebaseClientProvider>
         <Toaster />
         <ServiceWorkerRegister />
         <AddToHomePrompt />
-        <footer className="hidden md:flex w-full text-center text-[10px] text-muted-foreground py-3 mt-auto border-t flex-col gap-1 items-center">
-          <p>v {process.env.NEXT_PUBLIC_PR_NUMBER || pkg.version}</p>
+        <footer className="hidden md:flex w-full text-center text-[11px] text-[#6E6359] py-3 mt-auto border-t border-[#E8DFD1] bg-[#FAF6F0]/90 flex-col gap-1 items-center">
+          <p>Coaster · Built for #BuildHybridAI · v {process.env.NEXT_PUBLIC_PR_NUMBER || pkg.version}</p>
           <div className="flex gap-4">
-            <Link href="/privacy" className="hover:underline">Privacy Policy</Link>
+            <Link href="/privacy" className="hover:text-[#1F1B18] hover:underline">Privacy Policy</Link>
             <span>•</span>
-            <Link href="/terms" className="hover:underline">Terms of Service</Link>
+            <Link href="/terms" className="hover:text-[#1F1B18] hover:underline">Terms of Service</Link>
             <span>•</span>
-            <a href="mailto:nicholas.switzer@gmail.com" className="hover:underline">Support</a>
+            <a href="mailto:nicholas.switzer+coaster@gmail.com" className="hover:text-[#1F1B18] hover:underline">Support</a>
           </div>
         </footer>
       </body>

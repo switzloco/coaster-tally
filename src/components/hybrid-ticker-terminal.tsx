@@ -6,12 +6,12 @@ import {
   CheckCircle2,
   ChevronUp,
   CornerDownLeft,
-  Dumbbell,
+  GlassWater,
+  Leaf,
   Loader2,
   Receipt,
-  ShieldCheck,
+  Sparkles,
   Terminal,
-  Utensils,
   X,
 } from 'lucide-react';
 import { useFirebaseApp, useFirestore, useUser } from '@/firebase';
@@ -22,21 +22,19 @@ import {
 } from '@/components/execution-receipt-badge';
 import {
   auditMealPhotoReceiptHybrid,
+  estimateDrinkUnitsWithFallback,
   normalizeImageFileForHybrid,
   parseTickerTapeHybrid,
   SecPrivacyLockBlockedError,
-  type ExpenseReceiptAuditResult,
   type HybridExecutionReceipt,
   type NormalizedInlineImage,
   type SecComplianceAlert,
-  type TickerTapeParseResult,
 } from '@/lib/hybrid-ai';
 import {
-  CFO_CLASS_META,
-  type CfoLedgerClass,
-  type ReconciledFoodDraft,
-  type ReconciledWorkoutDraft,
-} from '@/lib/usda-local-reconciler';
+  formatUnits,
+  type DrinkCategory,
+} from '@/lib/drink-units';
+import { inferMealFromTime } from '@/lib/food-exercise-types';
 import { healthService, type HealthData } from '@/lib/health-service';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
@@ -50,35 +48,53 @@ interface HybridTickerTerminalProps {
   className?: string;
 }
 
+export interface ParsedDrinkDraft {
+  name: string;
+  volumeOz?: number;
+  abvPct?: number;
+  units: number;
+  category: DrinkCategory;
+  zeroProof?: boolean;
+  isClearDay?: boolean;
+  alternativeSuggested?: string;
+}
+
+interface ParsedDrinkPreview {
+  items: ParsedDrinkDraft[];
+  totalUnits: number;
+  isClearDay: boolean;
+  isZeroProof: boolean;
+  buddyNote?: string;
+  alternativeSuggestion?: string;
+  receipt: HybridExecutionReceipt;
+}
+
 const QUICK_SHORTHAND_EXAMPLES = [
-  '3 eggs, 1 cup oats, black coffee, and 35 min heavy squats',
-  '200g wild salmon, 1 cup white rice, 150g broccoli',
-  '2 scoops whey protein, 5g creatine, 25 min zone 2 cycling',
+  '2x 12oz 5%',
+  '3 Miller Lites',
+  'half bottle cab',
+  '16oz 7.2% hazy',
+  'clear day',
 ];
 
-function cfoClassBadgeStyles(cfoClass: CfoLedgerClass): string {
-  switch (cfoClass) {
-    case 'CAPITAL_ASSET_INFLOW':
-      return 'border-emerald-500/50 bg-emerald-950/60 text-emerald-300';
-    case 'LIABILITY_EXPOSURE':
-      return 'border-rose-500/60 bg-rose-950/60 text-rose-300';
-    case 'CAPITAL_CAPEX':
-      return 'border-cyan-500/50 bg-cyan-950/60 text-cyan-300';
-    case 'OPERATING_FUEL':
-    default:
-      return 'border-amber-500/40 bg-amber-950/40 text-amber-300';
+function categoryPillStyle(category: DrinkCategory, zeroProof?: boolean, isClearDay?: boolean): string {
+  if (isClearDay || zeroProof || category === 'clear-day' || category === 'zero-proof') {
+    return 'border-[#3F7D58]/40 bg-[#EAF3ED] text-[#2B5C3F]';
   }
+  if (category === 'wine' || category === 'cocktail' || category === 'spirits') {
+    return 'border-[#C26D2D]/40 bg-[#FEF3C7]/60 text-[#9A4E16]';
+  }
+  return 'border-[#E8DFD1] bg-[#FAF6F0] text-[#4A4139]';
 }
 
 /**
- * Bloomberg / CRT Hybrid Command Bar implementing:
- * - Feature A: Instant Natural-Language "Ticker Tape" Macro & Workout Parser (`PREFER_ON_DEVICE`)
- * - Feature B: Multimodal "Expense Receipt" Meal & Nutrition Label Auditor (`PREFER_ON_DEVICE`)
- * - Feature C: Automatic `ONLY_ON_DEVICE` enforcement + CRT compliance alert when `SEC PRIVACY LOCK` is ON
- * - 1-click Offline-First Audit Ledger Commit (`persistentLocalCache`)
+ * Coaster Hybrid Shorthand & Menu/Label Scanner.
+ * Parses fast drink shorthand ("2x 12oz 5%", "half bottle cab", "clear day") and
+ * scans can/bottle/tap-list photos using Firebase Hybrid AI (`PREFER_ON_DEVICE`
+ * or `ONLY_ON_DEVICE` Privacy Vault) with instant 1-tap Coaster logging.
  */
 export function HybridTickerTerminal({
-  healthData,
+  healthData: _healthData,
   targetDateIso,
   compact = false,
   collapsibleOnMobile = false,
@@ -104,8 +120,7 @@ export function HybridTickerTerminal({
   const [committedBanner, setCommittedBanner] = useState<string | null>(null);
 
   const [stagedImage, setStagedImage] = useState<NormalizedInlineImage | null>(null);
-  const [tickerResult, setTickerResult] = useState<TickerTapeParseResult | null>(null);
-  const [receiptAudit, setReceiptAudit] = useState<ExpenseReceiptAuditResult | null>(null);
+  const [preview, setPreview] = useState<ParsedDrinkPreview | null>(null);
   const [complianceAlert, setComplianceAlert] = useState<SecComplianceAlert | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
 
@@ -115,46 +130,85 @@ export function HybridTickerTerminal({
   const hasActiveContent = Boolean(
     isParsing ||
       stagedImage ||
-      tickerResult ||
-      receiptAudit ||
+      preview ||
       complianceAlert ||
       errorText ||
       committedBanner
   );
   const showCompactMobileLauncher = collapsibleOnMobile && !mobileExpanded && !hasActiveContent;
 
-  const activeFoods: ReconciledFoodDraft[] =
-    receiptAudit?.foods ?? tickerResult?.foods ?? [];
-  const activeWorkouts: ReconciledWorkoutDraft[] = tickerResult?.workouts ?? [];
-  const activeReceipt: HybridExecutionReceipt | null =
-    receiptAudit?.receipt ?? tickerResult?.receipt ?? null;
+  const normalizePreview = (rawRes: any): ParsedDrinkPreview => {
+    const rawItems: any[] = Array.isArray(rawRes?.items)
+      ? rawRes.items
+      : Array.isArray(rawRes?.foods)
+        ? rawRes.foods
+        : [];
 
-  const handleParseSubmit = async (e?: React.FormEvent, overrideText?: string) => {
-    if (e) e.preventDefault();
-    const raw = (overrideText ?? tickerInput).trim();
+    const items: ParsedDrinkDraft[] = rawItems.map((item) => {
+      const isClear = Boolean(item.isClearDay || item.category === 'clear-day' || item.drinkCategory === 'clear-day');
+      const isZp = Boolean(item.zeroProof || item.isZeroProof || item.category === 'zero-proof' || item.drinkCategory === 'zero-proof');
+      const units = Number(
+        item.standardUnits ?? item.units ?? item.alcoholDrinks ?? (isClear || isZp ? 0 : 1)
+      );
+      const category: DrinkCategory =
+        item.category ??
+        item.drinkCategory ??
+        (isClear ? 'clear-day' : isZp ? 'zero-proof' : 'beer');
 
-    // If user staged an Expense Receipt image, run Feature B Multimodal Audit
-    if (stagedImage && !overrideText) {
-      await runExpensePhotoAudit(stagedImage, raw);
-      return;
-    }
+      return {
+        name: String(item.name || (isClear ? 'Clear Day' : 'Standard Pour')),
+        volumeOz: typeof item.volumeOz === 'number' ? item.volumeOz : undefined,
+        abvPct: typeof item.abvPct === 'number' ? item.abvPct : undefined,
+        units: Math.max(0, Math.round(units * 10) / 10),
+        category,
+        zeroProof: isZp,
+        isClearDay: isClear,
+        alternativeSuggested: item.alternativeSuggested || rawRes?.alternativeSuggestion,
+      };
+    });
 
-    if (!raw) return;
+    const totalUnits =
+      typeof rawRes?.totalUnits === 'number'
+        ? Math.max(0, Math.round(rawRes.totalUnits * 10) / 10)
+        : Math.round(items.reduce((sum, item) => sum + item.units, 0) * 10) / 10;
+
+    return {
+      items,
+      totalUnits,
+      isClearDay: Boolean(rawRes?.isClearDay || items.some((i) => i.isClearDay)),
+      isZeroProof: Boolean(rawRes?.isZeroProof || items.some((i) => i.zeroProof)),
+      buddyNote: rawRes?.buddyNote || rawRes?.cfoCommentary || rawRes?.cfoAuditNote,
+      alternativeSuggestion: rawRes?.alternativeSuggestion,
+      receipt: rawRes.receipt,
+    };
+  };
+
+  const runDrinkScanOrParse = async (textInput: string, img?: NormalizedInlineImage | null) => {
     setIsParsing(true);
     setErrorText(null);
     setComplianceAlert(null);
     setCommittedBanner(null);
-    setReceiptAudit(null);
 
     try {
-      const parsed = await parseTickerTapeHybrid({
-        firebaseApp,
-        shorthandInput: raw,
-        secPrivacyLock,
-        userWeightKg: healthData?.weightKg ?? 78,
-      });
-      setTickerResult(parsed);
-      recordReceipt(parsed.receipt);
+      const res = img
+        ? await auditMealPhotoReceiptHybrid({
+            firebaseApp,
+            image: img,
+            note: textInput || undefined,
+            secPrivacyLock,
+          })
+        : secPrivacyLock
+          ? await parseTickerTapeHybrid({
+              firebaseApp,
+              shorthandInput: textInput,
+              secPrivacyLock: true,
+            })
+          : await estimateDrinkUnitsWithFallback(textInput, { firebaseApp });
+      const normalized = normalizePreview(res);
+      setPreview(normalized);
+      if (normalized.receipt) {
+        recordReceipt(normalized.receipt);
+      }
     } catch (err) {
       if (err instanceof SecPrivacyLockBlockedError) {
         setComplianceAlert(err.alert);
@@ -162,7 +216,7 @@ export function HybridTickerTerminal({
         setErrorText(
           err instanceof Error
             ? err.message
-            : 'Hybrid parser unavailable. Verify network or warm Local Nano Engine.'
+            : 'Hybrid drink parser is temporarily unavailable. Check your connection or warm Local Nano.'
         );
       }
     } finally {
@@ -170,35 +224,11 @@ export function HybridTickerTerminal({
     }
   };
 
-  const runExpensePhotoAudit = async (img: NormalizedInlineImage, note?: string) => {
-    setIsParsing(true);
-    setErrorText(null);
-    setComplianceAlert(null);
-    setCommittedBanner(null);
-    setTickerResult(null);
-
-    try {
-      const result = await auditMealPhotoReceiptHybrid({
-        firebaseApp,
-        image: img,
-        note,
-        secPrivacyLock,
-      });
-      setReceiptAudit(result);
-      recordReceipt(result.receipt);
-    } catch (err) {
-      if (err instanceof SecPrivacyLockBlockedError) {
-        setComplianceAlert(err.alert);
-      } else {
-        setErrorText(
-          err instanceof Error
-            ? err.message
-            : 'Multimodal Expense Audit failed. Try enabling Local Nano Multimodal or reconnecting.'
-        );
-      }
-    } finally {
-      setIsParsing(false);
-    }
+  const handleParseSubmit = async (e?: React.FormEvent, overrideText?: string) => {
+    if (e) e.preventDefault();
+    const raw = (overrideText ?? tickerInput).trim();
+    if (!raw && !stagedImage) return;
+    await runDrinkScanOrParse(raw, overrideText ? null : stagedImage);
   };
 
   const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -209,100 +239,69 @@ export function HybridTickerTerminal({
     try {
       const normalized = await normalizeImageFileForHybrid(file);
       setStagedImage(normalized);
-      await runExpensePhotoAudit(normalized, tickerInput);
+      await runDrinkScanOrParse(tickerInput.trim(), normalized);
     } catch (err) {
-      setErrorText(err instanceof Error ? err.message : 'Unable to process meal image.');
+      setErrorText(err instanceof Error ? err.message : 'Unable to process drink or label photo.');
     }
   };
 
-  const handleCommitToLedger = async () => {
-    if (!user || (!activeFoods.length && !activeWorkouts.length)) return;
+  const handleCommitToCoaster = async () => {
+    if (!user || !preview || preview.items.length === 0) return;
     setIsCommitting(true);
     const todayIso = new Date().toLocaleDateString('en-CA');
     const dateIso = targetDateIso || todayIso;
     const nowTime = new Date().toTimeString().slice(0, 5);
+    const mealSlot = inferMealFromTime(nowTime);
 
     try {
-      for (const f of activeFoods) {
+      for (const item of preview.items) {
         await healthService.logFood(db, user.uid, {
-          name: f.name,
-          portionG: f.portionG,
-          calories: f.calories,
-          proteinG: f.proteinG,
-          carbsG: f.carbsG,
-          fatG: f.fatG,
-          fiberG: f.fiberG,
-          plantMassG: f.plantMassG,
-          glycemicIndex: f.glycemicIndex,
-          omega3Mg: f.omega3Mg,
-          caffeineMg: f.caffeineMg,
-          hasElectrolytes: f.hasElectrolytes,
-          betaAlanineG: f.betaAlanineG,
-          creatineG: f.creatineG,
-          alcoholDrinks: f.alcoholDrinks,
-          hasSeedOils: f.hasSeedOils,
-          meal: f.meal,
-          source: f.source,
+          name: item.name,
+          portionG: item.volumeOz ? Math.round(item.volumeOz * 29.57) : 0,
+          calories: 0,
+          proteinG: 0,
+          carbsG: 0,
+          fatG: 0,
+          fiberG: 0,
+          alcoholDrinks: item.units,
+          standardUnits: item.units,
+          isClearDay: Boolean(item.isClearDay),
+          isZeroProof: Boolean(item.zeroProof),
+          drinkCategory: item.category,
+          ...(item.alternativeSuggested || preview.alternativeSuggestion
+            ? { alternativeSuggested: item.alternativeSuggested || preview.alternativeSuggestion }
+            : {}),
+          meal: mealSlot,
+          source: 'user_estimate',
           consumedAt: nowTime,
           date: dateIso,
-          inferenceSource: activeReceipt?.inferenceSource,
-          inferenceLatencyMs: activeReceipt?.latencyMs,
-          cfoClass: f.cfoClass,
+          inferenceSource: preview.receipt?.inferenceSource,
+          inferenceLatencyMs: preview.receipt?.latencyMs,
         });
       }
 
-      for (const w of activeWorkouts) {
-        await healthService.logExercise(db, user.uid, {
-          name: w.name,
-          category: w.category,
-          durationMin: w.durationMin,
-          sets: w.sets,
-          reps: w.reps,
-          weightKg: w.weightKg,
-          estimatedCaloriesBurned: w.estimatedCaloriesBurned,
-          adjustedCalories: w.adjustedCalories,
-          activityTier: w.activityTier,
-          pointsDelta: w.pointsDelta,
-          performedAt: nowTime,
-          date: dateIso,
-          inferenceSource: activeReceipt?.inferenceSource,
-          inferenceLatencyMs: activeReceipt?.latencyMs,
-          cfoClass: w.cfoClass,
-        });
-      }
-
-      if (dateIso === todayIso && activeFoods.length > 0) {
-        const addedCalories = activeFoods.reduce((s, f) => s + f.calories, 0);
-        const addedProtein = activeFoods.reduce((s, f) => s + f.proteinG, 0);
-        const addedCarbs = activeFoods.reduce((s, f) => s + f.carbsG, 0);
-        const addedPlants = activeFoods.reduce((s, f) => s + (f.plantMassG || 0), 0);
-
+      if (dateIso === todayIso) {
         await healthService.updateHealthData(db, user.uid, {
-          dailyCaloriesIn: (healthData?.dailyCaloriesIn || 0) + addedCalories,
-          dailyProteinG: (healthData?.dailyProteinG || 0) + addedProtein,
-          dailyCarbsG: (healthData?.dailyCarbsG || 0) + addedCarbs,
-          dailyPlantG: (healthData?.dailyPlantG || 0) + addedPlants,
           lastActiveDate: todayIso,
         });
       }
 
-      const itemCount = activeFoods.length + activeWorkouts.length;
-      const syncLabel = isOnline ? 'Synced to Audit Ledger' : 'Committed to Offline Local Cache';
+      const itemCount = preview.items.length;
+      const syncLabel = isOnline ? 'Saved to Coaster' : 'Saved Offline (Local Coaster)';
       setCommittedBanner(
-        `LEDGER POSTED: ${itemCount} double-entry item${itemCount === 1 ? '' : 's'} (${syncLabel})`
+        `Added ${itemCount} entr${itemCount === 1 ? 'y' : 'ies'} (${formatUnits(preview.totalUnits)}) · ${syncLabel}`
       );
       toast({
         title: syncLabel,
-        description: `${activeFoods.length} nutrition & ${activeWorkouts.length} CapEx entries recorded.`,
+        description: `${formatUnits(preview.totalUnits)} added to ${dateIso}.`,
       });
 
       setTickerInput('');
       setStagedImage(null);
-      setTickerResult(null);
-      setReceiptAudit(null);
+      setPreview(null);
       onCommitted?.();
     } catch (err) {
-      setErrorText(err instanceof Error ? err.message : 'Failed to commit entries to Ledger.');
+      setErrorText(err instanceof Error ? err.message : 'Could not save entry to your coaster.');
     } finally {
       setIsCommitting(false);
     }
@@ -312,7 +311,7 @@ export function HybridTickerTerminal({
     <section
       data-testid="hybrid-ticker-terminal"
       className={cn(
-        'shrink-0 rounded-xl border border-emerald-500/40 bg-slate-950 text-emerald-300 font-mono shadow-[0_0_28px_rgba(16,185,129,0.12)] overflow-hidden',
+        'shrink-0 rounded-2xl border border-[#E8DFD1] bg-[#FFFDF9] text-[#1F1B18] shadow-sm overflow-hidden',
         className
       )}
     >
@@ -325,387 +324,333 @@ export function HybridTickerTerminal({
         data-testid="expense-receipt-file-input"
       />
 
-      {/* Sleek 1-Line Mobile Launcher (keeps VF Score & Runway above the fold on mobile!) */}
       {showCompactMobileLauncher && (
-        <div className="sm:hidden flex items-center gap-1.5 p-2">
+        <div className="sm:hidden flex items-center gap-2 p-2.5">
           <button
             type="button"
             onClick={() => {
               setMobileExpanded(true);
               setTimeout(() => textInputRef.current?.focus(), 40);
             }}
-            className="flex-1 min-w-0 flex items-center gap-2 rounded-lg border border-emerald-500/35 bg-black/60 px-2.5 py-1.5 text-left"
+            className="flex-1 min-w-0 flex items-center gap-2 rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] px-3 py-2 text-left"
           >
-            <span className="text-emerald-400 font-bold text-xs shrink-0">$&gt;</span>
-            <span className="text-[11px] text-emerald-300/85 truncate">
-              Log meal or workout shorthand…
+            <Terminal className="w-3.5 h-3.5 text-[#C26D2D] shrink-0" />
+            <span className="text-xs text-[#6E6359] truncate font-mono">
+              2x 12oz 5%, half bottle cab, clear day...
             </span>
           </button>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={isParsing}
-            className="inline-flex items-center gap-1 rounded-lg border border-amber-500/50 bg-amber-500/15 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-300 shrink-0"
-            title="Snap meal or nutrition label photo"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[#C26D2D]/40 bg-[#FEF3C7]/60 px-3 py-2 text-xs font-semibold text-[#9A4E16] shrink-0"
+            title="Scan can ABV label or bar menu"
           >
-            <Camera className="w-3.5 h-3.5 text-amber-400" />
-            <span>Receipt</span>
+            <Camera className="w-3.5 h-3.5 text-[#C26D2D]" />
+            <span>Scan</span>
           </button>
         </div>
       )}
 
       <div className={cn(showCompactMobileLauncher && 'hidden sm:block')}>
-      {/* Terminal Top Header */}
-      <div className="flex items-center justify-between gap-2 border-b border-emerald-500/25 bg-slate-900/90 px-3 py-1.5 sm:px-3.5 sm:py-2">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <Terminal className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span className="text-[9.5px] sm:text-[10px] font-bold uppercase tracking-wider sm:tracking-widest text-emerald-300 truncate">
-            <span className="sm:hidden">HYBRID TICKER &amp; RECEIPT AUDITOR</span>
-            <span className="hidden sm:inline">CFO HYBRID TICKER TAPE &amp; EXPENSE RECEIPT AUDITOR</span>
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5 text-[8.5px] sm:text-[9px] uppercase tracking-wider shrink-0">
-          <span
-            className={cn(
-              'rounded px-1.5 py-0.5 border font-bold',
-              secPrivacyLock
-                ? 'border-emerald-400/60 bg-emerald-950 text-emerald-300'
-                : 'border-amber-500/40 bg-slate-950 text-amber-300'
-            )}
-          >
-            <span className="sm:hidden">{secPrivacyLock ? 'SEC LOCK' : 'HYBRID'}</span>
-            <span className="hidden sm:inline">
-              MODE: {secPrivacyLock ? 'ONLY_ON_DEVICE (SEC LOCK)' : 'PREFER_ON_DEVICE'}
+        {/* Header Bar */}
+        <div className="flex items-center justify-between gap-2 border-b border-[#E8DFD1] bg-[#FAF6F0] px-3.5 py-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Terminal className="w-3.5 h-3.5 text-[#C26D2D] shrink-0" />
+            <span className="text-[11px] font-semibold text-[#1F1B18] truncate">
+              Hybrid Shorthand &amp; Can / Menu Scanner
             </span>
-          </span>
-          {!isOnline && (
-            <span className="rounded px-1.5 py-0.5 border border-amber-400/60 bg-amber-950/60 text-amber-300 font-bold">
-              OFFLINE
-            </span>
-          )}
-          {collapsibleOnMobile && !hasActiveContent && (
-            <button
-              type="button"
-              onClick={() => setMobileExpanded(false)}
-              className="sm:hidden inline-flex items-center rounded border border-emerald-500/30 bg-slate-950 px-1.5 py-0.5 text-emerald-300"
-              aria-label="Minimize ticker"
+          </div>
+          <div className="flex items-center gap-1.5 font-mono text-[9.5px] uppercase tracking-wider shrink-0">
+            <span
+              className={cn(
+                'rounded-md px-2 py-0.5 border font-semibold',
+                secPrivacyLock
+                  ? 'border-[#3F7D58]/40 bg-[#EAF3ED] text-[#2B5C3F]'
+                  : 'border-[#E8DFD1] bg-[#FFFDF9] text-[#6E6359]'
+              )}
             >
-              <ChevronUp className="w-3 h-3" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Command Input Row */}
-      <div className="p-2.5 sm:p-3.5 space-y-2 sm:space-y-2.5">
-        <form onSubmit={(e) => handleParseSubmit(e)} className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1 flex items-center rounded-lg border border-emerald-500/40 bg-black/70 px-3 py-1.5 sm:py-2 focus-within:border-emerald-400 focus-within:shadow-[0_0_14px_rgba(16,185,129,0.25)]">
-            <span className="text-emerald-400 font-bold text-xs mr-2 shrink-0">$&gt;</span>
-            <input
-              ref={textInputRef}
-              type="text"
-              value={tickerInput}
-              onChange={(e) => setTickerInput(e.target.value)}
-              data-testid="ticker-tape-input"
-              aria-label="CFO Natural-Language Macro and Workout Ticker"
-              placeholder='Type shorthand: "3 eggs, 1 cup oats, 35m squats"'
-              className="w-full bg-transparent text-base sm:text-xs text-emerald-200 placeholder:text-emerald-700/90 focus:outline-none font-mono"
-            />
-            {tickerInput && (
+              {secPrivacyLock ? 'ONLY_ON_DEVICE' : 'PREFER_ON_DEVICE'}
+            </span>
+            {!isOnline && (
+              <span className="rounded-md px-2 py-0.5 border border-[#D97706]/40 bg-[#FEF3C7] text-[#9A4E16] font-semibold">
+                OFFLINE
+              </span>
+            )}
+            {collapsibleOnMobile && !hasActiveContent && (
               <button
                 type="button"
-                onClick={() => setTickerInput('')}
-                className="text-emerald-600 hover:text-emerald-300 ml-1"
-                aria-label="Clear ticker input"
+                onClick={() => setMobileExpanded(false)}
+                className="sm:hidden inline-flex items-center rounded-md border border-[#E8DFD1] bg-[#FFFDF9] px-1.5 py-0.5 text-[#6E6359]"
+                aria-label="Minimize shorthand bar"
+              >
+                <ChevronUp className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Input Form */}
+        <div className="p-3 sm:p-3.5 space-y-2.5">
+          <form onSubmit={(e) => handleParseSubmit(e)} className="flex flex-col sm:flex-row gap-2">
+            <div className="relative flex-1 flex items-center rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] px-3 py-2 focus-within:border-[#C26D2D]">
+              <input
+                ref={textInputRef}
+                type="text"
+                value={tickerInput}
+                onChange={(e) => setTickerInput(e.target.value)}
+                data-testid="ticker-tape-input"
+                aria-label="Coaster Drink Shorthand Input"
+                placeholder='e.g. "2x 12oz 5%", "3 Miller Lites", "half bottle cab", "clear day"'
+                className="w-full bg-transparent text-sm sm:text-xs text-[#1F1B18] placeholder:text-[#6E6359]/70 focus:outline-none font-mono"
+              />
+              {tickerInput && (
+                <button
+                  type="button"
+                  onClick={() => setTickerInput('')}
+                  className="text-[#6E6359] hover:text-[#1F1B18] ml-1"
+                  aria-label="Clear shorthand input"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isParsing}
+                data-testid="expense-receipt-upload-btn"
+                className="flex-1 sm:flex-initial justify-center inline-flex items-center gap-1.5 rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] hover:bg-[#F3ECE1] px-3 py-2 text-xs font-medium text-[#1F1B18] transition-colors disabled:opacity-50"
+                title="Scan a can, bottle ABV label, or bar menu"
+              >
+                <Camera className="w-3.5 h-3.5 text-[#C26D2D]" />
+                <span>Scan Label / Menu</span>
+              </button>
+
+              <button
+                type="submit"
+                disabled={isParsing || (!tickerInput.trim() && !stagedImage)}
+                data-testid="ticker-parse-submit-btn"
+                className="flex-1 sm:flex-initial justify-center inline-flex items-center gap-1.5 rounded-xl bg-[#C26D2D] hover:bg-[#A85B22] px-3.5 py-2 text-xs font-semibold text-[#FFFDF9] transition-colors disabled:opacity-40"
+              >
+                {isParsing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Reading...</span>
+                  </>
+                ) : (
+                  <>
+                    <CornerDownLeft className="w-3.5 h-3.5" />
+                    <span>Tally</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+
+          {/* Quick Shorthand Chips */}
+          {!compact && !preview && (
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar whitespace-nowrap">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#6E6359] shrink-0">
+                Quick try:
+              </span>
+              {QUICK_SHORTHAND_EXAMPLES.map((sample) => (
+                <button
+                  key={sample}
+                  type="button"
+                  onClick={() => {
+                    setTickerInput(sample);
+                    handleParseSubmit(undefined, sample);
+                  }}
+                  className="rounded-lg border border-[#E8DFD1] bg-[#FAF6F0] hover:border-[#C26D2D]/50 px-2.5 py-1 text-[11px] font-mono text-[#4A4139] hover:text-[#1F1B18] transition-colors shrink-0"
+                >
+                  {sample}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Staged Photo Preview */}
+          {stagedImage && (
+            <div className="flex items-center gap-3 rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] p-2.5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={stagedImage.previewDataUri}
+                alt="Drink label or menu scan"
+                className="w-11 h-11 rounded-lg object-cover border border-[#E8DFD1]"
+              />
+              <div className="flex-1 min-w-0 text-xs">
+                <p className="font-semibold text-[#1F1B18] flex items-center gap-1.5">
+                  <Receipt className="w-3.5 h-3.5 text-[#C26D2D]" />
+                  <span>Label / Menu Photo Attached ({stagedImage.mimeType})</span>
+                </p>
+                <p className="text-[11px] text-[#6E6359] truncate">
+                  Resized cleanly for on-device Chrome Gemini Nano &amp; Cloud Gemini.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setStagedImage(null);
+                  setPreview(null);
+                }}
+                className="text-[#6E6359] hover:text-[#1F1B18] p-1"
+                aria-label="Remove attached photo"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {complianceAlert && (
+            <SecComplianceAlertPanel
+              alert={complianceAlert}
+              onWarmNano={warmNano}
+              onDisableLock={() => {
+                setSecPrivacyLock(false);
+                setComplianceAlert(null);
+              }}
+            />
+          )}
+
+          {errorText && (
+            <div className="rounded-xl border border-[#C26D2D]/40 bg-[#FEF3C7]/45 px-3 py-2 text-xs text-[#9A4E16]">
+              {errorText}
+            </div>
+          )}
+
+          {committedBanner && (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-[#3F7D58]/35 bg-[#EAF3ED] px-3 py-2 text-xs text-[#2B5C3F]">
+              <span className="flex items-center gap-1.5 font-medium">
+                <CheckCircle2 className="w-4 h-4 text-[#3F7D58] shrink-0" />
+                {committedBanner}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCommittedBanner(null)}
+                className="text-[#2B5C3F] hover:text-[#1F1B18]"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isParsing}
-              data-testid="expense-receipt-upload-btn"
-              className="flex-1 sm:flex-initial justify-center inline-flex items-center gap-1.5 rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-amber-300 transition-colors disabled:opacity-50"
-              title="Upload or snap a JPEG/PNG meal photo or nutrition facts label for Multimodal Expense Audit"
-            >
-              <Camera className="w-3.5 h-3.5 text-amber-400" />
-              <span>RECEIPT PHOTO</span>
-            </button>
-
-            <button
-              type="submit"
-              disabled={isParsing || (!tickerInput.trim() && !stagedImage)}
-              data-testid="ticker-parse-submit-btn"
-              className="flex-1 sm:flex-initial justify-center inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/70 bg-emerald-500/20 hover:bg-emerald-500/30 px-3.5 py-2 text-[10px] font-bold uppercase tracking-wider text-emerald-200 transition-colors disabled:opacity-40"
-            >
-              {isParsing ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-300" />
-                  <span>AUDITING...</span>
-                </>
-              ) : (
-                <>
-                  <CornerDownLeft className="w-3.5 h-3.5 text-emerald-300" />
-                  <span>EXECUTE PARSE</span>
-                </>
-              )}
-            </button>
-          </div>
-        </form>
-
-        {/* Quick Shorthand Ticker Presets (single horizontal scroll strip on mobile) */}
-        {!compact && !tickerResult && !receiptAudit && (
-          <div className="flex items-center gap-1.5 pt-0.5 overflow-x-auto no-scrollbar whitespace-nowrap">
-            <span className="text-[9px] uppercase tracking-wider text-emerald-600 font-bold shrink-0">
-              QUICK TAPE:
-            </span>
-            {QUICK_SHORTHAND_EXAMPLES.map((sample) => (
-              <button
-                key={sample}
-                type="button"
-                onClick={() => {
-                  setTickerInput(sample);
-                  handleParseSubmit(undefined, sample);
-                }}
-                className="rounded border border-emerald-500/25 bg-emerald-950/30 hover:bg-emerald-900/40 px-2 py-0.5 text-[9px] text-emerald-400/90 hover:text-emerald-200 transition-colors shrink-0"
-              >
-                {sample}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Staged Photo Thumbnail */}
-        {stagedImage && (
-          <div className="flex items-center gap-3 rounded-lg border border-amber-500/30 bg-slate-900/80 p-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={stagedImage.previewDataUri}
-              alt="Meal expense receipt"
-              className="w-12 h-12 rounded object-cover border border-amber-400/40"
-            />
-            <div className="flex-1 min-w-0 text-[10px]">
-              <p className="font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1">
-                <Receipt className="w-3 h-3" />
-                Multimodal Expense Receipt Attached ({stagedImage.mimeType})
-              </p>
-              <p className="text-emerald-400/80 truncate">
-                InlineData normalized &le;960px for Chrome Gemini Nano &amp; Cloud Gemini.
-              </p>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setStagedImage(null);
-                setReceiptAudit(null);
-              }}
-              className="text-slate-400 hover:text-white p-1"
-              aria-label="Remove attached photo"
+          )}
+
+          {/* Parsed Drink Preview */}
+          {preview && (
+            <div
+              data-testid="hybrid-parse-preview"
+              className="rounded-2xl border border-[#E8DFD1] bg-[#FAF6F0] p-3.5 space-y-3"
             >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E8DFD1] pb-2">
+                {preview.receipt ? (
+                  <ExecutionReceiptBadge
+                    inferenceSource={preview.receipt.inferenceSource}
+                    latencyMs={preview.receipt.latencyMs}
+                  />
+                ) : (
+                  <span className="text-xs font-semibold text-[#6E6359]">Parsed Result</span>
+                )}
 
-        {/* SEC Privacy Lock Compliance Alert */}
-        {complianceAlert && (
-          <SecComplianceAlertPanel
-            alert={complianceAlert}
-            onWarmNano={warmNano}
-            onDisableLock={() => {
-              setSecPrivacyLock(false);
-              setComplianceAlert(null);
-            }}
-          />
-        )}
-
-        {/* Runtime Error */}
-        {errorText && (
-          <div className="rounded border border-rose-500/50 bg-rose-950/50 px-3 py-2 text-[10px] text-rose-300">
-            [AUDIT ERROR] {errorText}
-          </div>
-        )}
-
-        {/* Commit Confirmation Banner */}
-        {committedBanner && (
-          <div className="flex items-center justify-between gap-2 rounded border border-emerald-400/50 bg-emerald-950/60 px-3 py-2 text-[10px] text-emerald-200">
-            <span className="flex items-center gap-1.5 font-bold">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              {committedBanner}
-            </span>
-            <button
-              type="button"
-              onClick={() => setCommittedBanner(null)}
-              className="text-emerald-400 hover:text-white"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-        )}
-
-        {/* Parsed Double-Entry Audit Preview + 1-Click Commit */}
-        {(tickerResult || receiptAudit) && activeReceipt && (
-          <div
-            data-testid="hybrid-parse-preview"
-            className="rounded-lg border border-emerald-500/40 bg-slate-900/95 p-3 space-y-3"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-500/20 pb-2">
-              <ExecutionReceiptBadge
-                inferenceSource={activeReceipt.inferenceSource}
-                latencyMs={activeReceipt.latencyMs}
-              />
-
-              {receiptAudit && (
                 <span
                   className={cn(
-                    'rounded px-2 py-0.5 text-[10px] font-bold uppercase border',
-                    receiptAudit.auditVerdict === 'APPROVED_ASSET'
-                      ? 'border-emerald-400/60 bg-emerald-950 text-emerald-300'
-                      : receiptAudit.auditVerdict === 'FLAGGED_LIABILITY'
-                        ? 'border-rose-400/60 bg-rose-950 text-rose-300'
-                        : 'border-amber-400/60 bg-amber-950 text-amber-300'
+                    'rounded-md border px-2 py-0.5 font-mono text-xs font-semibold',
+                    preview.isClearDay || preview.isZeroProof
+                      ? 'border-[#3F7D58]/40 bg-[#EAF3ED] text-[#2B5C3F]'
+                      : 'border-[#C26D2D]/40 bg-[#FFFDF9] text-[#C26D2D]'
                   )}
                 >
-                  RECEIPT VERDICT: {receiptAudit.auditVerdict}
+                  Total: {formatUnits(preview.totalUnits)}
                 </span>
-              )}
-            </div>
-
-            {/* CFO Audit Commentary */}
-            <p className="text-[11px] text-amber-200/95 leading-relaxed border-l-2 border-amber-400 pl-2.5">
-              {receiptAudit ? receiptAudit.cfoCommentary : tickerResult?.cfoAuditNote}
-            </p>
-
-            {/* Double-Entry Line Items */}
-            <div className="space-y-1.5">
-              {activeFoods.map((item, idx) => {
-                const meta = CFO_CLASS_META[item.cfoClass];
-                return (
-                  <div
-                    key={`food_${idx}`}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded border border-emerald-500/20 bg-black/50 px-2.5 py-1.5 text-[10px]"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Utensils className="w-3 h-3 text-emerald-400 shrink-0" />
-                      <span className="font-bold text-emerald-100 truncate">
-                        {item.name}
-                      </span>
-                      <span className="text-emerald-500">({item.portionG}g)</span>
-                      <span
-                        className={cn(
-                          'rounded border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider',
-                          cfoClassBadgeStyles(item.cfoClass)
-                        )}
-                      >
-                        {meta.shortTag}
-                      </span>
-                      {item.usdaMatched && (
-                        <span className="rounded border border-emerald-500/30 bg-emerald-950/60 px-1 py-0.5 text-[8px] text-emerald-400">
-                          USDA
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-emerald-300 font-semibold">
-                      <span>{item.calories} kcal</span>
-                      <span className="text-emerald-400">{item.proteinG}g P</span>
-                      <span className="text-slate-400">{item.carbsG}g C</span>
-                      <span className="text-slate-400">{item.fatG}g F</span>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {activeWorkouts.map((wk, idx) => {
-                const meta = CFO_CLASS_META[wk.cfoClass];
-                return (
-                  <div
-                    key={`wk_${idx}`}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded border border-cyan-500/30 bg-cyan-950/20 px-2.5 py-1.5 text-[10px]"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Dumbbell className="w-3 h-3 text-cyan-400 shrink-0" />
-                      <span className="font-bold text-cyan-100 truncate">
-                        {wk.name}
-                      </span>
-                      <span className="text-cyan-400">({wk.durationMin} min)</span>
-                      <span
-                        className={cn(
-                          'rounded border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider',
-                          cfoClassBadgeStyles(wk.cfoClass)
-                        )}
-                      >
-                        {meta.shortTag}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-cyan-300 font-semibold">
-                      <span>-{wk.adjustedCalories} kcal net CapEx</span>
-                      <span className="text-emerald-400">+{wk.pointsDelta} VF pts</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Footer Totals + 1-Click Commit */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <div className="text-[10px] text-emerald-300/90 space-x-3">
-                <span>
-                  INFLOW:{' '}
-                  <strong>
-                    {activeFoods.reduce((s, f) => s + f.calories, 0)} kcal
-                  </strong>
-                </span>
-                <span>
-                  PROTEIN:{' '}
-                  <strong>
-                    {activeFoods.reduce((s, f) => s + f.proteinG, 0)}g
-                  </strong>
-                </span>
-                {activeWorkouts.length > 0 && (
-                  <span className="text-cyan-300">
-                    CAPEX:{' '}
-                    <strong>
-                      -{activeWorkouts.reduce((s, w) => s + w.adjustedCalories, 0)} kcal
-                    </strong>
-                  </span>
-                )}
               </div>
 
-              <div className="flex items-center gap-2">
+              {preview.buddyNote && (
+                <p className="text-xs text-[#4A4139] leading-relaxed border-l-2 border-[#C26D2D] pl-2.5">
+                  {preview.buddyNote}
+                </p>
+              )}
+
+              <div className="space-y-1.5">
+                {preview.items.map((item, idx) => (
+                  <div
+                    key={`drink_${idx}`}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#E8DFD1] bg-[#FFFDF9] px-3 py-2 text-xs"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {item.isClearDay || item.zeroProof ? (
+                        <Leaf className="w-3.5 h-3.5 text-[#3F7D58] shrink-0" />
+                      ) : (
+                        <GlassWater className="w-3.5 h-3.5 text-[#C26D2D] shrink-0" />
+                      )}
+                      <span className="font-semibold text-[#1F1B18] truncate">{item.name}</span>
+                      <span
+                        className={cn(
+                          'rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase',
+                          categoryPillStyle(item.category, item.zeroProof, item.isClearDay)
+                        )}
+                      >
+                        {item.category}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2.5 font-mono text-xs">
+                      {item.volumeOz ? (
+                        <span className="text-[#6E6359]">
+                          {item.volumeOz}oz{item.abvPct ? ` · ${item.abvPct}%` : ''}
+                        </span>
+                      ) : null}
+                      <span
+                        className={
+                          item.isClearDay || item.zeroProof
+                            ? 'font-semibold text-[#3F7D58]'
+                            : 'font-semibold text-[#C26D2D]'
+                        }
+                      >
+                        {formatUnits(item.units)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {preview.alternativeSuggestion && (
+                <div className="flex items-start gap-2 rounded-xl border border-[#3F7D58]/30 bg-[#EAF3ED]/75 px-3 py-2 text-xs text-[#2B5C3F]">
+                  <Sparkles className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Zero-proof idea:</strong> {preview.alternativeSuggestion}
+                  </span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => {
-                    setTickerResult(null);
-                    setReceiptAudit(null);
+                    setPreview(null);
                     setStagedImage(null);
                   }}
-                  className="rounded border border-slate-700 px-2.5 py-1 text-[10px] uppercase text-slate-400 hover:text-white"
+                  className="rounded-xl border border-[#E8DFD1] bg-[#FFFDF9] px-3 py-1.5 text-xs font-medium text-[#6E6359] hover:text-[#1F1B18]"
                 >
-                  DISCARD
+                  Discard
                 </button>
                 <button
                   type="button"
-                  onClick={handleCommitToLedger}
-                  disabled={isCommitting || (!activeFoods.length && !activeWorkouts.length)}
+                  onClick={handleCommitToCoaster}
+                  disabled={isCommitting || preview.items.length === 0}
                   data-testid="commit-to-audit-ledger-btn"
-                  className="inline-flex items-center gap-1.5 rounded border border-emerald-400 bg-emerald-500 text-slate-950 hover:bg-emerald-400 px-3 py-1 text-[10px] font-black uppercase tracking-wider transition-colors disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#3F7D58] hover:bg-[#316345] px-4 py-1.5 text-xs font-semibold text-[#FFFDF9] transition-colors disabled:opacity-50"
                 >
                   {isCommitting ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   ) : (
-                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <CheckCircle2 className="w-3.5 h-3.5" />
                   )}
-                  <span>COMMIT TO AUDIT LEDGER</span>
+                  <span>Add to Today&apos;s Coaster</span>
                 </button>
               </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
       </div>
     </section>
   );

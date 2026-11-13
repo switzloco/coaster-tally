@@ -1,6 +1,6 @@
 import { ImageResponse } from 'next/og';
 
-export const alt = 'the CFO — Free 3x/Day Eat-By Briefings';
+export const alt = 'Coaster — Gentle Morning & Evening Email Companion';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 
@@ -14,67 +14,72 @@ export default function OpengraphImage() {
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
-          background: '#0f172a',
-          color: '#ffffff',
-          padding: '64px 72px',
+          background: '#FAF6F0',
+          color: '#1F1B18',
+          padding: '60px 68px',
           fontFamily: 'sans-serif',
+          border: '12px solid #E8DFD1',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <div
               style={{
-                background: '#10b981',
-                color: '#052e16',
-                fontWeight: 900,
-                fontSize: 22,
-                padding: '10px 20px',
+                background: '#C26D2D',
+                color: '#FFFDF9',
+                fontWeight: 800,
+                fontSize: 20,
+                padding: '10px 22px',
                 borderRadius: 999,
-                letterSpacing: 2,
+                letterSpacing: 1.5,
                 textTransform: 'uppercase',
               }}
             >
-              FREE · $0 FOREVER · 1-CLICK CANCEL
+              COASTER · +COASTER@ EMAIL COMPANION
             </div>
           </div>
-          <div style={{ fontSize: 28, fontWeight: 900, fontStyle: 'italic', color: '#94a3b8' }}>
-            cfofitness.app/briefings
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#6E6359' }}>
+            Sunny · Mindful Drink Tally
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           <div
             style={{
-              fontSize: 66,
-              fontWeight: 900,
-              lineHeight: 1.06,
-              letterSpacing: -1.5,
+              fontSize: 62,
+              fontWeight: 800,
+              lineHeight: 1.08,
+              letterSpacing: -1.2,
+              color: '#1F1B18',
             }}
           >
-            3x/Day &ldquo;Eat-By&rdquo; Briefings via Email or Discord.
+            Gentle 2x/Day Check-Ins Straight From Your Inbox.
           </div>
-          <div style={{ fontSize: 28, color: '#cbd5e1', lineHeight: 1.4, maxWidth: 980 }}>
-            Morning, Midday &amp; Evening dispatches: know your exact protein window or when you&apos;re good through morning. Reply in plain English to log.
+          <div style={{ fontSize: 26, color: '#6E6359', lineHeight: 1.4, maxWidth: 980 }}>
+            Reply in plain English (&ldquo;2 hazy IPAs&rdquo;) or snap a can label. Standard Drink Units tracked without judgment.
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 20 }}>
+        <div style={{ display: 'flex', gap: 22 }}>
           <div
             style={{
               display: 'flex',
               flexDirection: 'column',
-              background: '#064e3b',
-              border: '2px solid #10b981',
-              borderRadius: 20,
-              padding: '18px 26px',
+              background: '#FFFDF9',
+              border: '2px solid #C26D2D',
+              borderRadius: 22,
+              padding: '22px 28px',
               flex: 1,
             }}
           >
-            <span style={{ fontSize: 16, fontWeight: 800, color: '#6ee7b7', letterSpacing: 1.5 }}>
-              7:00 AM MORNING
+            <span style={{ fontSize: 16, fontWeight: 800, color: '#C26D2D', letterSpacing: 1.4 }}>
+              9:00 AM · MORNING CHECK-IN
             </span>
-            <span style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>
-              Good from yesterday until 12:30 PM
+            <span style={{ fontSize: 24, fontWeight: 700, marginTop: 8, color: '#1F1B18' }}>
+              Yesterday: 1.5u Wine · 7-Day Avg: 1.1u/day
+            </span>
+            <span style={{ fontSize: 18, marginTop: 8, color: '#6E6359' }}>
+              Tap to adjust yesterday or open your zero-login Live Coaster.
             </span>
           </div>
 
@@ -82,37 +87,21 @@ export default function OpengraphImage() {
             style={{
               display: 'flex',
               flexDirection: 'column',
-              background: '#1e293b',
-              border: '2px solid #f59e0b',
-              borderRadius: 20,
-              padding: '18px 26px',
+              background: '#EAF3ED',
+              border: '2px solid #3F7D58',
+              borderRadius: 22,
+              padding: '22px 28px',
               flex: 1,
             }}
           >
-            <span style={{ fontSize: 16, fontWeight: 800, color: '#fcd34d', letterSpacing: 1.5 }}>
-              12:00 PM MIDDAY
+            <span style={{ fontSize: 16, fontWeight: 800, color: '#2B5C3F', letterSpacing: 1.4 }}>
+              7:00 PM · EVENING CHECK-IN
             </span>
-            <span style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>
-              Eat ~45g protein by 2:30 PM
+            <span style={{ fontSize: 24, fontWeight: 700, marginTop: 8, color: '#1F1B18' }}>
+              Log 1.0u Beer · 1.0u Wine · 0.0u Clear Day
             </span>
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              background: '#1e293b',
-              border: '2px solid #38bdf8',
-              borderRadius: 20,
-              padding: '18px 26px',
-              flex: 1,
-            }}
-          >
-            <span style={{ fontSize: 16, fontWeight: 800, color: '#7dd3fc', letterSpacing: 1.5 }}>
-              7:00 PM EVENING
-            </span>
-            <span style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>
-              Good through 8:00 AM · Close kitchen
+            <span style={{ fontSize: 18, marginTop: 8, color: '#2B5C3F' }}>
+              Or reply to Sunny with what is in your glass.
             </span>
           </div>
         </div>
