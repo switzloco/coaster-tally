@@ -13,6 +13,20 @@
       "functions"
     ]
   },
+  "auth": {
+    "providers": {
+      "anonymous": true,
+      "emailPassword": true,
+      "googleSignIn": {
+        "oAuthBrandDisplayName": "Coaster",
+        "supportEmail": "nicholas.switzer@gmail.com",
+        "authorizedRedirectUris": [
+          "https://coaster-tally-2026.firebaseapp.com/__/auth/handler",
+          "https://coaster--coaster-tally-2026.us-central1.hosted.app/__/auth/handler"
+        ]
+      }
+    }
+  },
   "firestore": {
     "rules": "firestore.rules",
     "database": "(default)"
