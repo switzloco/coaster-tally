@@ -1,41 +1,120 @@
 /**
- * @fileOverview Shared types for the structured food and exercise log collections.
+ * @fileOverview Shared types for Coaster's structured drink/beverage ledger and legacy log compatibility.
  * Used by both client (health-service.ts) and admin (health-service-admin.ts).
+ * Firestore collection `food_log` is preserved for rule and index compatibility.
  */
 
 import type { FieldValue, Timestamp } from 'firebase/firestore';
 
+export type DrinkCategory =
+  | 'beer'
+  | 'wine'
+  | 'spirits'
+  | 'cocktail'
+  | 'seltzer'
+  | 'zero-proof'
+  | 'clear-day';
+
+export interface FoodItem {
+  id?: string;
+  name: string;
+  quantityText?: string;
+  volumeOz?: number;
+  abvPct?: number;
+  units?: number;
+  standardUnits?: number;
+  category?: DrinkCategory;
+  zeroProof?: boolean;
+  isClearDay?: boolean;
+  alternativeSuggested?: string;
+  // Optional legacy fields retained for compatibility with shared entries & tests
+  portionG?: number;
+  calories?: number;
+  proteinG?: number;
+  carbsG?: number;
+  fatG?: number;
+  fiberG?: number;
+  alcoholDrinks?: number;
+}
+
 export interface FoodLogEntry {
   id?: string;
   name: string;
+  // Coaster NIAAA Standard Drink Unit fields (1.0u = 14g ethanol = 0.6 fl oz pure alcohol)
+  standardUnits?: number;
+  volumeOz?: number;
+  abvPct?: number;
+  isClearDay?: boolean;
+  isZeroProof?: boolean;
+  drinkCategory?: DrinkCategory;
+  alternativeSuggested?: string;
+  dayCountOverride?: number;
+  notes?: string;
+  // Legacy numeric fields kept compatible with Firestore & existing queries (0 for Coaster drink pours)
   portionG: number;
   calories: number;
   proteinG: number;
   carbsG: number;
   fatG: number;
   fiberG: number;
-  // Raw weight in grams of fruits + vegetables only (Starrett 800g protocol).
-  // Apple = 100% of portion. Salad = ~80% portion. Grain dish = 0g. Optional;
-  // 0 / undefined means "not tracked".
+  // Raw weight in grams of fruits + vegetables only (optional legacy field).
   plantMassG?: number;
-  glycemicIndex?: number;      // 0-100; affects absorption speed and insulin spike
-  omega3Mg?: number;           // Omega-3 content (EPA/DHA); anti-inflammatory & sensitivity
-  caffeineMg?: number;         // caffeine content; boosts fat oxidation rate
-  hasElectrolytes?: boolean;   // true if electrolytes were supplemented
-  betaAlanineG?: number;       // Beta-alanine (g) — rate-limiting precursor for intramuscular carnosine saturation (179g target)
-  creatineG?: number;          // Creatine monohydrate (g) — phosphocreatine & cell-volumization saturation
-  source: 'usda' | 'web_search' | 'user_estimate';
-  meal: 'breakfast' | 'lunch' | 'dinner' | 'snack';
-  alcoholDrinks?: number;      // number of alcoholic drinks in this entry
-  hasSeedOils?: boolean;       // true if meal contains heavy seed oils / deep-fried
+  glycemicIndex?: number;
+  omega3Mg?: number;
+  caffeineMg?: number;
+  hasElectrolytes?: boolean;
+  betaAlanineG?: number;
+  creatineG?: number;
+  source:
+    | 'usda'
+    | 'web_search'
+    | 'user_estimate'
+    | 'coaster'
+    | 'preset'
+    | 'hybrid_ai'
+    | 'email'
+    | 'share'
+    | 'manual';
+  meal: 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'drink' | 'evening' | 'clear-day';
+  alcoholDrinks?: number;      // number of NIAAA standard drinks (synced with standardUnits)
+  hasSeedOils?: boolean;
   ignored?: boolean;           // soft-delete flag — entry excluded from totals when true
-  consumedAt?: string;         // HH:MM (24h) — when the user actually ate, from conversation context
-  /** Hybrid AI execution metadata for CRT audit receipt badges */
+  consumedAt?: string;         // HH:MM (24h) — local time of pour / check-in
+  /** Hybrid AI execution metadata for receipt badges */
   inferenceSource?: 'ON_DEVICE' | 'IN_CLOUD';
   inferenceLatencyMs?: number;
   cfoClass?: 'CAPITAL_ASSET_INFLOW' | 'LIABILITY_EXPOSURE' | 'CAPITAL_CAPEX' | 'OPERATING_FUEL';
   timestamp: FieldValue | Timestamp;
   date: string; // "YYYY-MM-DD" for date-range queries
+}
+
+export interface DailyLog {
+  date: string; // "YYYY-MM-DD"
+  entries: FoodLogEntry[];
+  totalUnits: number;
+  drinkCount: number;
+  zeroProofCount: number;
+  isClearDay: boolean;
+  note?: string;
+}
+
+export interface DashboardSummary {
+  todayUnits: number;
+  sevenDayAvgUnits: number;
+  thirtyDayTotalUnits: number;
+  clearDaysLast30: number;
+  zeroProofSwapsLast30: number;
+  sevenDayTotalUnits?: number;
+  ninetyDayTotalUnits?: number;
+  todayDrinkCount?: number;
+  todayZeroProofCount?: number;
+  isTodayClearDay?: boolean;
+  rollingVsPriorPct?: number | null;
+  // Optional legacy fields retained for gradual caller migration
+  dailyCaloriesIn?: number;
+  dailyCaloriesOut?: number;
+  dailyProteinG?: number;
+  visceralFatPoints?: number;
 }
 
 /**

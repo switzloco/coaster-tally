@@ -1,93 +1,157 @@
-import { describe, it, expect, vi } from 'vitest';
-import { buildScoreHistory, estimateCaloriesOut, type DayLogs } from '../score-backfill';
-import type { FoodLogEntry, ExerciseLogEntry } from '../food-exercise-types';
+import { describe, expect, it } from 'vitest';
+import { buildScoreHistory, type DayLogs } from '../score-backfill';
+import { buildDrinkLogEntry, type DrinkCategory } from '../drink-units';
+import type { FoodLogEntry } from '../food-exercise-types';
 import type { HistoryEntry } from '../health-service';
 
-vi.mock('firebase/firestore', () => ({}));
-
-function food(o: Partial<FoodLogEntry> = {}): FoodLogEntry {
+function makeDrink(params: {
+  name: string;
+  volumeOz: number;
+  abvPct: number;
+  standardUnits: number;
+  category: DrinkCategory;
+  isZeroProof?: boolean;
+  isClearDay?: boolean;
+  date: string;
+  ignored?: boolean;
+}): FoodLogEntry {
   return {
-    name: 'meal', portionG: 300, calories: 600, proteinG: 50, carbsG: 50, fatG: 20, fiberG: 5,
-    source: 'user_estimate', meal: 'lunch', consumedAt: '12:00', timestamp: {} as any, date: '2026-06-03', ...o,
+    ...buildDrinkLogEntry(params),
+    id: `${params.date}_${params.name}`,
+    ignored: params.ignored,
+    timestamp: new Date(`${params.date}T19:00:00.000Z`) as unknown as FoodLogEntry['timestamp'],
   };
 }
 
-const baseInput = {
-  fitbitCaloriesOutByDate: { '2026-06-03': 3600 } as Record<string, number | undefined>,
-  weightKg: 94, bodyFatPct: 22, heightCm: 180, age: 42, proteinGoal: 180,
-};
-
-describe('score backfill — buildScoreHistory', () => {
-  it('scores days that have logs and skips empty days', () => {
+describe('NIAAA Standard Drink Unit score backfill', () => {
+  it('aggregates daily pours, clear days, zero-proof swaps, and cumulative units', () => {
     const logsByDate: Record<string, DayLogs> = {
-      '2026-06-02': { food: [food({ date: '2026-06-02', calories: 500 })], exercise: [] },
-      '2026-06-03': { food: [food({ date: '2026-06-03', calories: 1500, proteinG: 168 })], exercise: [] },
-      // 2026-06-04 intentionally absent (no logs) — must not be scored
+      '2026-11-10': {
+        food: [
+          makeDrink({
+            name: 'Craft IPA',
+            volumeOz: 16,
+            abvPct: 7,
+            standardUnits: 1.9,
+            category: 'beer',
+            date: '2026-11-10',
+          }),
+          makeDrink({
+            name: 'Sparkling Yuzu',
+            volumeOz: 12,
+            abvPct: 0,
+            standardUnits: 0,
+            category: 'zero-proof',
+            isZeroProof: true,
+            date: '2026-11-10',
+          }),
+        ],
+      },
+      '2026-11-11': {
+        food: [
+          makeDrink({
+            name: 'Clear Day',
+            volumeOz: 0,
+            abvPct: 0,
+            standardUnits: 0,
+            category: 'clear-day',
+            isClearDay: true,
+            date: '2026-11-11',
+          }),
+        ],
+      },
+      '2026-11-12': {
+        food: [
+          makeDrink({
+            name: 'Pinot Noir',
+            volumeOz: 6,
+            abvPct: 14.5,
+            standardUnits: 1.5,
+            category: 'wine',
+            date: '2026-11-12',
+          }),
+        ],
+      },
     };
-    const r = buildScoreHistory({
-      ...baseInput,
-      windowDates: ['2026-06-02', '2026-06-03', '2026-06-04'],
+
+    const res = buildScoreHistory({
+      windowDates: ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12'],
       logsByDate,
       existingHistory: [],
     });
-    expect(r.scoredDays).toBe(2);
-    expect(r.history.map((h) => h.isoDate)).toEqual(['2026-06-02', '2026-06-03']);
+
+    expect(res.scoredDays).toBe(3); // 11-09 unlogged -> skipped
+    expect(res.totalUnits).toBe(3.4);
+    expect(res.visceralFatPoints).toBe(3.4);
+    expect(res.clearDays).toBe(1);
+    expect(res.zeroProofSwaps).toBe(1);
+
+    expect(res.history).toHaveLength(3);
+    expect(res.history[0]?.isoDate).toBe('2026-11-10');
+    expect(res.history[0]?.gain).toBe(1.9);
+    expect(res.history[0]?.equity).toBe(1.9);
+    expect(res.history[0]?.scoringVersion).toBe('coaster-niaaa-v1');
+    expect(res.history[0]?.detail).toContain('zero-proof');
+
+    expect(res.history[1]?.isoDate).toBe('2026-11-11');
+    expect(res.history[1]?.gain).toBe(0);
+    expect(res.history[1]?.status).toBe('Bullish');
+    expect(res.history[1]?.detail).toContain('Clear Day');
+
+    expect(res.history[2]?.isoDate).toBe('2026-11-12');
+    expect(res.history[2]?.gain).toBe(1.5);
+    expect(res.history[2]?.equity).toBe(3.4);
   });
 
-  it('cumulative equity is the running sum of gains in date order', () => {
-    const logsByDate: Record<string, DayLogs> = {
-      '2026-06-02': { food: [food({ date: '2026-06-02' })], exercise: [] },
-      '2026-06-03': { food: [food({ date: '2026-06-03' })], exercise: [] },
+  it('preserves out-of-window entries, skips ignored logs, and stays idempotent', () => {
+    const oldEntry: HistoryEntry = {
+      date: 'Oct 1',
+      isoDate: '2026-10-01',
+      gain: 2.0,
+      equity: 2.0,
+      status: 'Stable',
+      detail: '2.0u · 2 pours',
     };
-    const r = buildScoreHistory({ ...baseInput, windowDates: ['2026-06-02', '2026-06-03'], logsByDate, existingHistory: [] });
-    expect(r.history[0].equity).toBe(r.history[0].gain);
-    expect(r.history[1].equity).toBe(r.history[0].gain + r.history[1].gain);
-    expect(r.visceralFatPoints).toBe(r.history[1].equity);
-  });
 
-  it('is idempotent — re-running replaces, never duplicates, a date', () => {
     const logsByDate: Record<string, DayLogs> = {
-      '2026-06-03': { food: [food({ date: '2026-06-03' })], exercise: [] },
+      '2026-11-12': {
+        food: [
+          makeDrink({
+            name: 'Ignored Drink',
+            volumeOz: 12,
+            abvPct: 5,
+            standardUnits: 1.0,
+            category: 'beer',
+            date: '2026-11-12',
+            ignored: true,
+          }),
+          makeDrink({
+            name: 'Pilsner',
+            volumeOz: 12,
+            abvPct: 5,
+            standardUnits: 1.0,
+            category: 'beer',
+            date: '2026-11-12',
+          }),
+        ],
+      },
     };
-    const first = buildScoreHistory({ ...baseInput, windowDates: ['2026-06-03'], logsByDate, existingHistory: [] });
-    const second = buildScoreHistory({ ...baseInput, windowDates: ['2026-06-03'], logsByDate, existingHistory: first.history });
-    expect(second.history).toHaveLength(1);
-    expect(second.history[0].gain).toBe(first.history[0].gain);
-    expect(second.visceralFatPoints).toBe(first.visceralFatPoints);
-  });
 
-  it('flags BMR-estimated calorie-out when no device data exists for a day', () => {
-    const logsByDate: Record<string, DayLogs> = {
-      '2026-03-20': { food: [food({ date: '2026-03-20' })], exercise: [] },
-    };
-    const r = buildScoreHistory({
-      ...baseInput,
-      fitbitCaloriesOutByDate: {}, // no device data
-      windowDates: ['2026-03-20'],
+    const first = buildScoreHistory({
+      windowDates: ['2026-11-12'],
       logsByDate,
-      existingHistory: [],
+      existingHistory: [oldEntry],
     });
-    expect(r.history[0].breakdown?.caloriesOutEstimated).toBe(true);
-  });
+    expect(first.history).toHaveLength(2);
+    expect(first.history[0]?.isoDate).toBe('2026-10-01');
+    expect(first.history[1]?.gain).toBe(1.0);
+    expect(first.history[1]?.equity).toBe(3.0);
 
-  it('preserves out-of-window history entries', () => {
-    const existing: HistoryEntry[] = [
-      { date: 'Jan 1', isoDate: '2026-01-01', gain: 40, status: 'Bullish', detail: 'old', equity: 40 },
-    ];
-    const logsByDate: Record<string, DayLogs> = {
-      '2026-06-03': { food: [food({ date: '2026-06-03' })], exercise: [] },
-    };
-    const r = buildScoreHistory({ ...baseInput, windowDates: ['2026-06-03'], logsByDate, existingHistory: existing });
-    expect(r.history.map((h) => h.isoDate)).toEqual(['2026-01-01', '2026-06-03']);
-    // Equity recomputed cumulatively across the full, preserved history.
-    expect(r.history[0].equity).toBe(40);
-    expect(r.history[1].equity).toBe(40 + r.history[1].gain);
-  });
-
-  it('estimateCaloriesOut adds logged exercise on top of an activity-scaled RMR', () => {
-    const rest = estimateCaloriesOut(0, 94, 180, 42);
-    const withExercise = estimateCaloriesOut(500, 94, 180, 42);
-    expect(withExercise).toBe(rest + 500);
-    expect(rest).toBeGreaterThan(1500);
+    const second = buildScoreHistory({
+      windowDates: ['2026-11-12'],
+      logsByDate,
+      existingHistory: first.history,
+    });
+    expect(second.history).toEqual(first.history);
   });
 });

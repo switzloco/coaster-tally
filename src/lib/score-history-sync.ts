@@ -1,76 +1,68 @@
 /**
- * @fileOverview Server orchestration for auto-scoring backdated days.
- *
- * Pulls the user's logs + per-day device snapshots for a window, scores every
- * day with activity, and upserts the result into the equity history. Device
- * calorie-burn (Fitbit) is used where present (~last 7 days); older days fall
- * back to a BMR-based estimate, flagged via breakdown.caloriesOutEstimated.
+ * Server-side Firestore orchestration for NIAAA Standard Drink Unit history backfill.
+ * Aggregates `food_log` entries over the requested window and updates `history` on the
+ * user's health summary document without touching calorie/macro/VF calculations.
  */
 
 import { getAdminFirestore } from '@/firebase/admin';
 import { adminHealthService } from './health-service-admin';
+import type { FoodLogEntry } from './food-exercise-types';
+import type { HistoryEntry } from './health-service';
 import { buildScoreHistory, type DayLogs } from './score-backfill';
-import type { FoodLogEntry, ExerciseLogEntry } from './food-exercise-types';
 
-function addDays(iso: string, delta: number): string {
-  const [y, m, d] = iso.split('-').map(Number);
+function addDays(isoDate: string, delta: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
   dt.setUTCDate(dt.getUTCDate() + delta);
   return dt.toISOString().slice(0, 10);
 }
 
+/**
+ * Rebuilds NIAAA Standard Drink Unit history over the inclusive window ending on `localDate`.
+ */
 export async function backfillScoreHistory(
   userId: string,
   localDate: string,
   days = 90,
-): Promise<{ ok: boolean; scoredDays: number }> {
+): Promise<{ ok: boolean; scoredDays: number; totalUnits: number }> {
   const firestore = getAdminFirestore();
-
   const windowStart = addDays(localDate, -(days - 1));
-  const fetchStart = addDays(localDate, -days); // one extra day for the consecutive-alcohol lookback
 
-  const [health, prefs, food, exercise] = await Promise.all([
+  const [health, food] = await Promise.all([
     adminHealthService.getHealthSummary(firestore, userId),
-    adminHealthService.getUserPreferences(firestore, userId),
-    adminHealthService.queryLogRangeAll(firestore, userId, 'food_log', fetchStart, localDate),
-    adminHealthService.queryLogRangeAll(firestore, userId, 'exercise_log', fetchStart, localDate),
+    adminHealthService.queryLogRangeAll(firestore, userId, 'food_log', windowStart, localDate),
   ]);
 
-  // Group logs by date.
   const logsByDate: Record<string, DayLogs> = {};
-  const ensure = (date: string) => (logsByDate[date] ??= { food: [], exercise: [] });
-  for (const f of food as unknown as FoodLogEntry[]) if (f.date) ensure(f.date).food.push(f);
-  for (const e of exercise as unknown as ExerciseLogEntry[]) if (e.date) ensure(e.date).exercise.push(e);
-
-  // Per-day device calorie-burn.
-  const fitbitCaloriesOutByDate: Record<string, number | undefined> = {};
-  const fitbitByDate = health?.fitbitByDate ?? {};
-  for (const [date, snap] of Object.entries(fitbitByDate)) {
-    fitbitCaloriesOutByDate[date] = (snap as { caloriesOut?: number })?.caloriesOut;
+  const ensure = (date: string) => (logsByDate[date] ??= { food: [] });
+  for (const f of food as unknown as FoodLogEntry[]) {
+    if (f.date) ensure(f.date).food.push(f);
   }
 
-  // Build the inclusive window of dates.
   const windowDates: string[] = [];
-  for (let d = windowStart; d <= localDate; d = addDays(d, 1)) windowDates.push(d);
+  for (let d = windowStart; d <= localDate; d = addDays(d, 1)) {
+    windowDates.push(d);
+  }
 
-  const { history, visceralFatPoints, scoredDays } = buildScoreHistory({
+  const { history, totalUnits, visceralFatPoints, scoredDays } = buildScoreHistory({
     windowDates,
     logsByDate,
-    fitbitCaloriesOutByDate,
-    weightKg: health?.weightKg,
-    bodyFatPct: health?.bodyFatPct,
-    heightCm: health?.heightCm,
-    age: prefs?.profile?.age,
-    proteinGoal: prefs?.targets?.proteinGoal ?? 150,
     existingHistory: health?.history ?? [],
   });
 
-  // Only write when something actually changed (avoid a needless write every load).
-  const prevSig = JSON.stringify((health?.history ?? []).map((h) => [h.isoDate, h.gain, h.equity]));
-  const nextSig = JSON.stringify(history.map((h) => [h.isoDate, h.gain, h.equity]));
+  const prevSig = JSON.stringify(
+    (health?.history ?? []).map((h: HistoryEntry) => [h.isoDate, h.gain, h.equity, h.detail]),
+  );
+  const nextSig = JSON.stringify(
+    history.map((h: HistoryEntry) => [h.isoDate, h.gain, h.equity, h.detail]),
+  );
+
   if (prevSig !== nextSig) {
-    await adminHealthService.updateHealthData(firestore, userId, { history, visceralFatPoints });
+    await adminHealthService.updateHealthData(firestore, userId, {
+      history,
+      visceralFatPoints,
+    });
   }
 
-  return { ok: true, scoredDays };
+  return { ok: true, scoredDays, totalUnits };
 }
