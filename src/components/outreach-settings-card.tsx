@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Bell, Check, Loader2, Mail, MessageCircle, Send, XCircle } from 'lucide-react';
+import { Bell, Check, Loader2, Mail, Send, XCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import type { OutreachCadence, OutreachChannel, OutreachPreferences } from '@/lib/health-service';
+import type { OutreachCadence, OutreachPreferences } from '@/lib/health-service';
 import {
   sendLiveBriefingNowAction,
   updateMyOutreachSettingsAction,
@@ -20,16 +20,20 @@ interface OutreachSettingsCardProps {
   initialOutreach?: OutreachPreferences;
 }
 
+const CADENCE_OPTIONS: { id: OutreachCadence; label: string; summary: string }[] = [
+  { id: '2x', label: '2x/Day (Morn & Eve)', summary: 'Morning reflection + Evening check-in' },
+  { id: 'daily', label: 'Once Daily', summary: 'One check-in per day' },
+  { id: 'weekly', label: 'Weekly Digest', summary: 'Sunday evening weekly rhythm' },
+  { id: 'pause', label: 'Pause', summary: 'Temporarily paused' },
+];
+
 export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettingsCardProps) {
   const { toast } = useToast();
   const [enabled, setEnabled] = useState(Boolean(initialOutreach?.enabled));
-  const [channel, setChannel] = useState<OutreachChannel>(initialOutreach?.channel ?? 'email');
-  const [cadence, setCadence] = useState<OutreachCadence>(initialOutreach?.cadence ?? '3x');
+  const [cadence, setCadence] = useState<OutreachCadence>(initialOutreach?.cadence ?? '2x');
   const [email, setEmail] = useState(initialOutreach?.email ?? user?.email ?? '');
-  const [discordUserId, setDiscordUserId] = useState(initialOutreach?.discordUserId ?? '');
   const [timezone, setTimezone] = useState(initialOutreach?.timezone ?? 'America/Los_Angeles');
-  const [morningHour, setMorningHour] = useState(String(initialOutreach?.morningHour ?? 7));
-  const [middayHour, setMiddayHour] = useState(String(initialOutreach?.middayHour ?? 12));
+  const [morningHour, setMorningHour] = useState(String(initialOutreach?.morningHour ?? 9));
   const [nightHour, setNightHour] = useState(String(initialOutreach?.nightHour ?? 19));
 
   const [isSaving, setIsSaving] = useState(false);
@@ -39,13 +43,10 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
   useEffect(() => {
     if (initialOutreach) {
       setEnabled(Boolean(initialOutreach.enabled));
-      setChannel(initialOutreach.channel ?? 'email');
-      setCadence(initialOutreach.cadence ?? '3x');
+      setCadence(initialOutreach.cadence ?? '2x');
       if (initialOutreach.email) setEmail(initialOutreach.email);
-      if (initialOutreach.discordUserId) setDiscordUserId(initialOutreach.discordUserId);
       if (initialOutreach.timezone) setTimezone(initialOutreach.timezone);
       if (initialOutreach.morningHour != null) setMorningHour(String(initialOutreach.morningHour));
-      if (initialOutreach.middayHour != null) setMiddayHour(String(initialOutreach.middayHour));
       if (initialOutreach.nightHour != null) setNightHour(String(initialOutreach.nightHour));
     } else {
       try {
@@ -58,38 +59,38 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
     }
   }, [initialOutreach, user?.email]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSave = async (nextEnabled = enabled) => {
+  const handleSave = async (nextEnabled = enabled, nextCadence = cadence) => {
     if (!user) return;
+    const effectiveEnabled = nextEnabled && nextCadence !== 'pause';
     setIsSaving(true);
     try {
       const idToken = await user.getIdToken();
       const res = await updateMyOutreachSettingsAction(idToken, {
-        enabled: nextEnabled,
-        channel,
-        cadence,
+        enabled: effectiveEnabled,
+        channel: 'email',
+        cadence: effectiveEnabled ? nextCadence : 'pause',
         email,
-        discordUserId,
         timezone,
-        morningHour: Number(morningHour) || 7,
-        middayHour: Number(middayHour) || 12,
+        morningHour: Number(morningHour) || 9,
         nightHour: Number(nightHour) || 19,
       });
 
       if (!res.success) {
         toast({
           variant: 'destructive',
-          title: 'Could Not Update Briefings',
-          description: res.error || 'Check your email or Discord ID.',
+          title: 'Could Not Update Email Companion',
+          description: res.error || 'Please check your email address.',
         });
         return;
       }
 
-      setEnabled(nextEnabled);
+      setEnabled(effectiveEnabled);
+      if (!effectiveEnabled) setCadence('pause');
       toast({
-        title: nextEnabled ? 'Daily Briefings Active' : 'Daily Briefings Canceled',
-        description: nextEnabled
-          ? `Scheduled (${cadence === '3x' ? 'Morning, Midday & Evening' : 'Morning Only'}) in ${timezone}.`
-          : 'Automated outreach turned off immediately.',
+        title: effectiveEnabled ? 'Email Companion Saved' : 'Email Check-Ins Paused',
+        description: effectiveEnabled
+          ? `Sunny will check in (${CADENCE_OPTIONS.find((o) => o.id === nextCadence)?.label ?? nextCadence}) in ${timezone}.`
+          : 'Automated email check-ins paused cleanly.',
       });
     } finally {
       setIsSaving(false);
@@ -105,8 +106,8 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
       if (!res.success) {
         toast({
           variant: 'destructive',
-          title: 'Briefing Error',
-          description: res.error || 'Could not compose briefing.',
+          title: 'Check-In Error',
+          description: res.error || 'Could not compose email check-in.',
         });
         return;
       }
@@ -114,9 +115,9 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
         setLivePreview({ headline: res.headline, body: res.body });
       }
       toast({
-        title: res.delivered ? 'Live Briefing Sent' : 'Live Briefing Composed',
+        title: res.delivered ? 'Live Check-In Sent' : 'Live Check-In Composed',
         description: res.delivered
-          ? 'Check your Email or Discord DM.'
+          ? 'Check your inbox — reply anytime via +coaster@.'
           : res.headline || 'Preview shown below.',
       });
     } finally {
@@ -125,151 +126,135 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
   };
 
   return (
-    <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/10">
-      <CardHeader className="p-6 pb-2">
+    <Card className="bg-[#FFFDF9] border-[#E8DFD1] shadow-sm rounded-2xl">
+      <CardHeader className="p-5 sm:p-6 pb-3">
         <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-            <Bell className="w-4 h-4 text-primary" />
-            Automated Daily Briefings (Free · $0)
+          <CardTitle className="text-sm font-semibold text-[#1F1B18] flex items-center gap-2.5">
+            <Bell className="w-4 h-4 text-[#C26D2D]" />
+            <span>2-Way +coaster@ Email Companion</span>
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Badge variant={enabled ? 'default' : 'secondary'} className="text-[10px] uppercase font-black">
-              {enabled ? 'Active' : 'Off'}
+            <Badge
+              variant="secondary"
+              className={
+                enabled
+                  ? 'bg-[#EAF3ED] text-[#2B5C3F] border border-[#3F7D58]/30 text-[10px] font-semibold uppercase'
+                  : 'bg-[#F4EDE2] text-[#6E6359] text-[10px] font-semibold uppercase'
+              }
+            >
+              {enabled ? 'Active' : 'Paused'}
             </Badge>
             <Switch
               checked={enabled}
               onCheckedChange={(checked) => {
                 setEnabled(checked);
-                if (!checked) handleSave(false);
+                const targetCadence = checked && cadence === 'pause' ? '2x' : cadence;
+                if (checked && cadence === 'pause') setCadence('2x');
+                handleSave(checked, targetCadence);
               }}
             />
           </div>
         </div>
       </CardHeader>
-      <CardContent className="p-6 pt-3 space-y-4">
-        <p className="text-xs text-muted-foreground leading-relaxed">
-          Receive Morning, Midday, and Evening dispatches with your live <strong>&ldquo;Eat by XYZ&rdquo;</strong> clock or <strong>&ldquo;Good from yesterday&rdquo;</strong> buffer status. Always free, 1-click cancel in every message.
+
+      <CardContent className="p-5 sm:p-6 pt-1 space-y-4">
+        <p className="text-xs sm:text-sm text-[#6E6359] leading-relaxed">
+          Receive gentle Morning &amp; Evening check-ins from{' '}
+          <strong className="text-[#1F1B18]">Sunny · Coaster</strong>. Simply reply to our
+          dedicated <code className="font-mono text-[#1F1B18]">+coaster@</code> address with plain
+          text (&ldquo;Glass of pinot noir&rdquo;, &ldquo;Clear day&rdquo;) or bottle photos—or tap
+          any 1-click pour button in the email.
         </p>
 
-        <div className="flex flex-wrap gap-2">
-          {(['email', 'discord', 'both'] as const).map((ch) => (
-            <Button
-              key={ch}
-              type="button"
-              size="sm"
-              variant={channel === ch ? 'default' : 'outline'}
-              onClick={() => setChannel(ch)}
-              className="rounded-xl text-[11px] font-black uppercase tracking-wider gap-1.5"
-            >
-              {ch === 'email' && <Mail className="w-3 h-3" />}
-              {ch === 'discord' && <MessageCircle className="w-3 h-3" />}
-              {ch === 'both' ? 'Email + Discord' : ch}
-            </Button>
-          ))}
-
-          <Button
-            type="button"
-            size="sm"
-            variant={cadence === '3x' ? 'secondary' : 'outline'}
-            onClick={() => setCadence(cadence === '3x' ? 'morning_only' : '3x')}
-            className="rounded-xl text-[11px] font-bold ml-auto"
-          >
-            {cadence === '3x' ? '3x/Day (Morn · Mid · Night)' : '1x/Day (Morning Only)'}
-          </Button>
+        {/* Cadence Pills */}
+        <div className="space-y-1.5">
+          <Label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6359]">
+            Check-In Cadence
+          </Label>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {CADENCE_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => {
+                  setCadence(opt.id);
+                  if (opt.id !== 'pause' && !enabled) setEnabled(true);
+                }}
+                className={`rounded-xl border px-3 py-2 text-left transition-colors ${
+                  cadence === opt.id
+                    ? 'border-[#C26D2D] bg-[#FEF3C7]/45 text-[#1F1B18]'
+                    : 'border-[#E8DFD1] bg-[#FAF6F0] text-[#6E6359] hover:text-[#1F1B18]'
+                }`}
+              >
+                <div className="text-xs font-semibold">{opt.label}</div>
+                <div className="text-[10px] opacity-80 truncate">{opt.summary}</div>
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-3">
-          {(channel === 'email' || channel === 'both') && (
-            <div className="space-y-1">
-              <Label className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">
-                Delivery Email
-              </Label>
-              <Input
-                type="email"
-                placeholder="you@domain.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="h-9 text-xs bg-white/80"
-              />
-            </div>
-          )}
-
-          {(channel === 'discord' || channel === 'both') && (
-            <div className="space-y-1">
-              <Label className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">
-                Discord User ID
-              </Label>
-              <Input
-                type="text"
-                placeholder="123456789012345678"
-                value={discordUserId}
-                onChange={(e) => setDiscordUserId(e.target.value)}
-                className="h-9 text-xs font-mono bg-white/80"
-              />
-            </div>
-          )}
+          <div className="space-y-1">
+            <Label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6359] flex items-center gap-1.5">
+              <Mail className="w-3 h-3 text-[#C26D2D]" />
+              Delivery Email
+            </Label>
+            <Input
+              type="email"
+              placeholder="you@domain.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="h-9 text-xs bg-[#FAF6F0] border-[#E8DFD1]"
+            />
+          </div>
 
           <div className="space-y-1">
-            <Label className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+            <Label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6359]">
               Timezone
             </Label>
             <Input
               type="text"
               value={timezone}
               onChange={(e) => setTimezone(e.target.value)}
-              className="h-9 text-xs font-mono bg-white/80"
+              className="h-9 text-xs font-mono bg-[#FAF6F0] border-[#E8DFD1]"
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
-            <div className="space-y-1">
-              <Label className="text-[9px] font-black uppercase tracking-wider text-muted-foreground">
-                Morn (h)
-              </Label>
-              <Input
-                type="number"
-                min={4}
-                max={11}
-                value={morningHour}
-                onChange={(e) => setMorningHour(e.target.value)}
-                className="h-9 text-xs bg-white/80"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[9px] font-black uppercase tracking-wider text-muted-foreground">
-                Mid (h)
-              </Label>
-              <Input
-                type="number"
-                min={11}
-                max={16}
-                disabled={cadence === 'morning_only'}
-                value={middayHour}
-                onChange={(e) => setMiddayHour(e.target.value)}
-                className="h-9 text-xs bg-white/80"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-[9px] font-black uppercase tracking-wider text-muted-foreground">
-                Night (h)
-              </Label>
-              <Input
-                type="number"
-                min={17}
-                max={22}
-                disabled={cadence === 'morning_only'}
-                value={nightHour}
-                onChange={(e) => setNightHour(e.target.value)}
-                className="h-9 text-xs bg-white/80"
-              />
-            </div>
+          <div className="space-y-1">
+            <Label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6359]">
+              Morning Hour (local)
+            </Label>
+            <Input
+              type="number"
+              min={5}
+              max={11}
+              disabled={cadence === 'pause'}
+              value={morningHour}
+              onChange={(e) => setMorningHour(e.target.value)}
+              className="h-9 text-xs bg-[#FAF6F0] border-[#E8DFD1]"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6359]">
+              Evening Hour (local)
+            </Label>
+            <Input
+              type="number"
+              min={16}
+              max={22}
+              disabled={cadence === 'pause' || cadence === 'morning_only'}
+              value={nightHour}
+              onChange={(e) => setNightHour(e.target.value)}
+              className="h-9 text-xs bg-[#FAF6F0] border-[#E8DFD1]"
+            />
           </div>
         </div>
 
         {livePreview && (
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 space-y-1">
-            <div className="text-xs font-black text-foreground">{livePreview.headline}</div>
-            <div className="text-[11px] text-muted-foreground leading-relaxed">{livePreview.body}</div>
+          <div className="rounded-xl border border-[#3F7D58]/30 bg-[#EAF3ED]/75 p-3.5 space-y-1">
+            <div className="text-xs font-semibold text-[#1F1B18]">{livePreview.headline}</div>
+            <div className="text-xs text-[#4A4139] leading-relaxed">{livePreview.body}</div>
           </div>
         )}
 
@@ -278,11 +263,15 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
             type="button"
             size="sm"
             disabled={isSaving}
-            onClick={() => handleSave(true)}
-            className="rounded-xl font-black uppercase tracking-wider text-xs gap-1.5"
+            onClick={() => handleSave(cadence !== 'pause', cadence === 'pause' ? 'pause' : cadence)}
+            className="rounded-xl bg-[#C26D2D] hover:bg-[#A85B22] text-[#FFFDF9] font-semibold text-xs gap-1.5"
           >
-            {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-            {enabled ? 'Save Briefing Schedule' : 'Enable Free Briefings'}
+            {isSaving ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Check className="w-3.5 h-3.5" />
+            )}
+            {enabled ? 'Save Check-In Schedule' : 'Enable Email Companion'}
           </Button>
 
           <Button
@@ -291,10 +280,14 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
             variant="outline"
             disabled={isSendingNow}
             onClick={handleSendNow}
-            className="rounded-xl font-black uppercase tracking-wider text-xs gap-1.5"
+            className="rounded-xl border-[#E8DFD1] bg-[#FAF6F0] hover:bg-[#F3ECE1] text-[#1F1B18] font-medium text-xs gap-1.5"
           >
-            {isSendingNow ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-            Send Live Briefing Now
+            {isSendingNow ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Send className="w-3.5 h-3.5 text-[#C26D2D]" />
+            )}
+            Send Test Check-In Now
           </Button>
 
           {enabled && (
@@ -303,11 +296,11 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
               size="sm"
               variant="ghost"
               disabled={isSaving}
-              onClick={() => handleSave(false)}
-              className="rounded-xl font-black uppercase tracking-wider text-xs text-destructive hover:bg-destructive/10 gap-1.5 ml-auto"
+              onClick={() => handleSave(false, 'pause')}
+              className="rounded-xl text-xs font-medium text-[#6E6359] hover:text-[#1F1B18] gap-1.5 ml-auto"
             >
               <XCircle className="w-3.5 h-3.5" />
-              Cancel Briefings
+              Pause Emails
             </Button>
           )}
         </div>

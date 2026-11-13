@@ -3,22 +3,22 @@ import { BriefingsEnrollView } from '@/components/briefings-enroll-view';
 import { SITE_URL } from '@/lib/site';
 
 export const metadata: Metadata = {
-  title: 'Free 3x/Day Eat-By Briefings | the CFO',
+  title: '2-Way Email Companion | Coaster',
   description:
-    'Get free automated Morning, Midday, and Evening "Eat-By" briefings via Email or Discord. $0 forever, plain-English reply logging, 1-click cancel.',
+    'Gentle Morning & Evening Coaster check-ins by email (+coaster@). Reply in plain English or with a bottle photo, tap quick standard-unit pours, and view your Live Coaster without logging in.',
   openGraph: {
-    title: 'Free 3x/Day "Eat-By" Briefings · the CFO',
+    title: '2-Way Email Companion · Coaster',
     description:
-      'Morning, Midday & Evening nutrition clocks via Email or Discord. Always $0, reply in plain English to log, 1-click cancel.',
+      'Morning & Evening mindful drink check-ins from Sunny. Reply directly by email in plain English or with a photo, pause anytime in 1 tap.',
     url: `${SITE_URL}/briefings`,
-    siteName: 'the CFO',
+    siteName: 'Coaster',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Free 3x/Day "Eat-By" Briefings · the CFO',
+    title: '2-Way Email Companion · Coaster',
     description:
-      'Morning, Midday & Evening nutrition clocks via Email or Discord. Always $0, 1-click cancel.',
+      'Morning & Evening mindful drink check-ins from Sunny. Reply in plain English or attach a photo.',
   },
 };
 

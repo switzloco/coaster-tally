@@ -1,20 +1,18 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Mail, MessageCircle, Clock, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { Mail, Clock, CheckCircle2, Loader2, Sparkles, Leaf } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { enrollPublicOutreachAction } from '@/app/actions/outreach';
-import type { OutreachCadence, OutreachChannel } from '@/lib/health-service';
+import type { OutreachCadence } from '@/lib/health-service';
 
 export function OutreachEnrollmentCard() {
-  const [channel, setChannel] = useState<OutreachChannel>('email');
   const [email, setEmail] = useState('');
-  const [discordUserId, setDiscordUserId] = useState('');
-  const [weightLbs, setWeightLbs] = useState('');
-  const [cadence, setCadence] = useState<OutreachCadence>('3x');
+  const [firstName, setFirstName] = useState('');
+  const [cadence, setCadence] = useState<OutreachCadence>('2x');
   const [timezone, setTimezone] = useState('America/Los_Angeles');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +27,7 @@ export function OutreachEnrollmentCard() {
       const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (detected) setTimezone(detected);
     } catch {
-      // Keep default America/Los_Angeles
+      // Keep America/Los_Angeles fallback
     }
   }, []);
 
@@ -39,24 +37,26 @@ export function OutreachEnrollmentCard() {
     setIsSubmitting(true);
 
     try {
-      const parsedWeight = weightLbs.trim() ? Number(weightLbs.trim()) : undefined;
       const res = await enrollPublicOutreachAction({
-        channel,
-        email: channel === 'email' ? email : undefined,
-        discordUserId: channel === 'discord' ? discordUserId : undefined,
-        weightLbs: parsedWeight,
+        channel: 'email',
+        email,
         cadence,
         timezone,
+        morningHour: 9,
+        nightHour: 19,
+        ...(firstName.trim() ? { firstName: firstName.trim() } : {}),
       });
 
       if (!res.success) {
-        setError(res.error || 'Could not activate briefings.');
+        setError(res.error || 'Could not activate Email Companion.');
         return;
       }
 
       setEnrolledPreview({
-        headline: res.headline || 'Briefings Activated',
-        body: res.body || 'Your Morning, Midday, and Evening dispatches are scheduled.',
+        headline: res.headline || 'Sunny Email Companion Activated',
+        body:
+          res.body ||
+          'Your welcome guide and check-ins are on the way. Reply anytime via our +coaster@ inbox to log pours or clear evenings.',
         deliveredNow: res.deliveredNow,
       });
     } finally {
@@ -65,45 +65,47 @@ export function OutreachEnrollmentCard() {
   };
 
   return (
-    <section id="daily-briefings" className="py-16 px-6">
+    <section id="email-companion" className="py-12 px-4 sm:px-6">
       <div className="max-w-4xl mx-auto">
-        <Card className="border-2 border-primary/20 shadow-2xl bg-card overflow-hidden rounded-3xl">
-          <CardContent className="p-8 md:p-10 space-y-6">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="space-y-2">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-black uppercase tracking-widest">
-                  <Clock className="w-3 h-3" />
-                  Free Autopilot Coaching · $0 · 1-Click Cancel
-                </div>
-                <h3 className="text-2xl md:text-3xl font-black uppercase italic tracking-tight text-foreground">
-                  Don&apos;t Want Another Dashboard? Get 3x/Day &ldquo;Eat-By&rdquo; Briefings
-                </h3>
-                <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
-                  Morning, Midday, and Evening dispatches via Email or Discord. Every ping gives you one clear call — either an exact <strong>&ldquo;Eat by 2:30 PM&rdquo;</strong> protein window or <strong>&ldquo;You&apos;re good from yesterday&rdquo;</strong> — with 1-tap logging and 1-click cancel in every message.
-                </p>
+        <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-[0_8px_32px_rgba(31,27,24,0.06)] overflow-hidden rounded-3xl">
+          <CardContent className="p-6 sm:p-10 space-y-6">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#EAF3ED] border border-[#3F7D58]/30 text-[#2B5C3F] text-xs font-medium">
+                <Clock className="w-3.5 h-3.5 text-[#3F7D58]" />
+                <span>2-Way +coaster@ Email Companion · Free · Pause Anytime</span>
               </div>
+
+              <h3 className="text-2xl sm:text-3xl font-semibold tracking-tight text-[#1F1B18] font-['Newsreader',Georgia,serif]">
+                Prefer a Gentle Inbox Check-In Over Opening Another App?
+              </h3>
+
+              <p className="text-sm sm:text-base text-[#6E6359] max-w-2xl leading-relaxed">
+                Sunny can drop by at <strong className="text-[#1F1B18]">9:00 AM &amp; 7:00 PM</strong>{' '}
+                with your running tally and 1-tap buttons. Just{' '}
+                <strong className="text-[#1F1B18]">reply to the +coaster@ email</strong> in plain
+                English (&ldquo;Two hazy IPAs at trivia&rdquo; or &ldquo;Clear day&rdquo;) or attach a
+                can label photo to log automatically.
+              </p>
             </div>
 
             {enrolledPreview ? (
-              <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-6 space-y-3">
-                <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 text-xs font-black uppercase tracking-widest">
-                  <CheckCircle2 className="w-4 h-4" />
+              <div className="rounded-2xl border border-[#3F7D58]/35 bg-[#EAF3ED]/75 p-5 sm:p-6 space-y-3">
+                <div className="flex items-center gap-2 text-[#2B5C3F] text-xs font-semibold uppercase tracking-wider">
+                  <CheckCircle2 className="w-4 h-4 text-[#3F7D58]" />
                   {enrolledPreview.deliveredNow
-                    ? 'Active — First Live Briefing Dispatched'
+                    ? 'Active — Welcome & Check-In Sent to Your Inbox'
                     : 'Active — Scheduled for Your Local Timezone'}
                 </div>
-                <div className="text-lg font-black text-foreground">
+                <div className="text-lg font-semibold text-[#1F1B18]">
                   {enrolledPreview.headline}
                 </div>
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  {enrolledPreview.body}
-                </p>
-                <div className="pt-2">
+                <p className="text-sm text-[#4A4139] leading-relaxed">{enrolledPreview.body}</p>
+                <div className="pt-1">
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="rounded-xl text-xs font-bold"
+                    className="rounded-xl text-xs font-medium border-[#E8DFD1] bg-[#FFFDF9] hover:bg-[#FAF6F0]"
                     onClick={() => setEnrolledPreview(null)}
                   >
                     Update Delivery Preferences
@@ -111,114 +113,96 @@ export function OutreachEnrollmentCard() {
                 </div>
               </div>
             ) : (
-              <form onSubmit={handleSubmit} className="space-y-5 pt-2">
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant={channel === 'email' ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setChannel('email')}
-                    className="rounded-xl font-black uppercase tracking-wider text-xs gap-2"
-                  >
-                    <Mail className="w-3.5 h-3.5" />
-                    Email Briefings
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={channel === 'discord' ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setChannel('discord')}
-                    className="rounded-xl font-black uppercase tracking-wider text-xs gap-2"
-                  >
-                    <MessageCircle className="w-3.5 h-3.5" />
-                    Discord DMs
-                  </Button>
-                </div>
-
+              <form onSubmit={handleSubmit} className="space-y-4 pt-1">
                 <div className="grid sm:grid-cols-3 gap-4">
                   <div className="sm:col-span-2 space-y-1.5">
-                    {channel === 'email' ? (
-                      <>
-                        <Label htmlFor="outreach-email" className="text-[11px] font-black uppercase tracking-wider text-muted-foreground">
-                          Email Address
-                        </Label>
-                        <Input
-                          id="outreach-email"
-                          type="email"
-                          required
-                          placeholder="you@domain.com"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className="h-11 rounded-xl"
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <Label htmlFor="outreach-discord" className="text-[11px] font-black uppercase tracking-wider text-muted-foreground">
-                          Discord User ID (17–20 Digits)
-                        </Label>
-                        <Input
-                          id="outreach-discord"
-                          type="text"
-                          required
-                          placeholder="123456789012345678"
-                          value={discordUserId}
-                          onChange={(e) => setDiscordUserId(e.target.value)}
-                          className="h-11 rounded-xl font-mono"
-                        />
-                      </>
-                    )}
+                    <Label
+                      htmlFor="outreach-email"
+                      className="text-xs font-semibold text-[#4A4139]"
+                    >
+                      Email Address
+                    </Label>
+                    <Input
+                      id="outreach-email"
+                      type="email"
+                      required
+                      placeholder="you@domain.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="h-11 rounded-xl bg-[#FAF6F0] border-[#E8DFD1] text-[#1F1B18]"
+                    />
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="outreach-weight" className="text-[11px] font-black uppercase tracking-wider text-muted-foreground">
-                      Body Weight (lbs, optional)
+                    <Label
+                      htmlFor="outreach-firstname"
+                      className="text-xs font-semibold text-[#4A4139]"
+                    >
+                      First Name (optional)
                     </Label>
                     <Input
-                      id="outreach-weight"
-                      type="number"
-                      min={80}
-                      max={500}
-                      placeholder="175"
-                      value={weightLbs}
-                      onChange={(e) => setWeightLbs(e.target.value)}
-                      className="h-11 rounded-xl"
+                      id="outreach-firstname"
+                      type="text"
+                      placeholder="Marlo"
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      className="h-11 rounded-xl bg-[#FAF6F0] border-[#E8DFD1] text-[#1F1B18]"
                     />
                   </div>
                 </div>
 
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-1">
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                {/* Cadence Selection */}
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  {(
+                    [
+                      { id: '2x', label: 'Morning & Evening (2x/day)' },
+                      { id: 'daily', label: 'Once Daily' },
+                      { id: 'weekly', label: 'Weekly Digest' },
+                    ] as const
+                  ).map((opt) => (
                     <button
+                      key={opt.id}
                       type="button"
-                      onClick={() => setCadence(cadence === '3x' ? 'morning_only' : '3x')}
-                      className="underline font-bold text-foreground hover:text-primary transition-colors"
+                      onClick={() => setCadence(opt.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors ${
+                        cadence === opt.id
+                          ? 'bg-[#C26D2D] text-[#FFFDF9] border-[#C26D2D] shadow-xs'
+                          : 'bg-[#FAF6F0] text-[#4A4139] border-[#E8DFD1] hover:border-[#C26D2D]/50'
+                      }`}
                     >
-                      {cadence === '3x'
-                        ? 'Cadence: Morning, Midday & Evening (3x/day)'
-                        : 'Cadence: Morning Briefing Only (1x/day)'}
+                      {opt.label}
                     </button>
-                    <span>·</span>
-                    <span className="font-mono text-[11px]">{timezone}</span>
+                  ))}
+                  <span className="text-[11px] font-mono text-[#6E6359] sm:ml-auto">
+                    {timezone}
+                  </span>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2">
+                  <div className="flex items-center gap-2 text-xs text-[#6E6359]">
+                    <Leaf className="w-4 h-4 text-[#3F7D58] shrink-0" />
+                    <span>
+                      Dedicated <code className="font-mono text-[#1F1B18]">+coaster@</code> reply
+                      box · 1-click pause in every email
+                    </span>
                   </div>
 
                   <Button
                     type="submit"
                     disabled={isSubmitting}
-                    className="h-12 px-8 rounded-xl font-black uppercase tracking-widest text-xs gap-2 shrink-0"
+                    className="h-11 px-6 rounded-xl bg-[#C26D2D] hover:bg-[#A85B22] text-[#FFFDF9] font-semibold text-xs sm:text-sm gap-2 shrink-0 shadow-md shadow-[#C26D2D]/15"
                   >
                     {isSubmitting ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
-                      <Sparkles className="w-4 h-4" />
+                      <Mail className="w-4 h-4" />
                     )}
-                    Start Free Briefings
+                    <span>Start Email Check-Ins</span>
+                    <Sparkles className="w-3.5 h-3.5" />
                   </Button>
                 </div>
 
-                {error && (
-                  <p className="text-xs font-bold text-destructive">{error}</p>
-                )}
+                {error && <p className="text-xs font-semibold text-[#B45309]">{error}</p>}
               </form>
             )}
           </CardContent>

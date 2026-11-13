@@ -2,7 +2,23 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { Briefcase, ShieldCheck, MessageSquare, Target, History, LogOut, Cloud, Loader2, User as UserIcon, Info, RefreshCw, Settings, Sparkles } from 'lucide-react';
+import {
+  Sunrise,
+  ShieldCheck,
+  MessageCircle,
+  GlassWater,
+  TrendingUp,
+  LogOut,
+  Cloud,
+  Loader2,
+  User as UserIcon,
+  RefreshCw,
+  Settings,
+  Sparkles,
+  Wifi,
+  WifiOff,
+  Lock,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -11,10 +27,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { useAuth, useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
+} from '@/components/ui/dropdown-menu';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { useAuth, useUser, useFirestore, useDoc, useMemoFirebase, useFirebaseApp } from '@/firebase';
 import {
   signInAnonymously,
   linkWithPopup,
@@ -32,60 +48,112 @@ import {
 } from '@/lib/auth-environment';
 import { doc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
-import { runInternalAudit } from '@/lib/internal-audit';
 import { healthService, HealthData, UserPreferences } from '@/lib/health-service';
-import { resolveClientEntitlement } from '@/lib/entitlements';
-import { redeemFounderCodeAction } from '@/app/actions/entitlements';
-import { PaywallModal } from '@/components/paywall-modal';
 import { LocalAiTelemetryBar } from '@/components/local-ai-telemetry-bar';
 import { QuarterlyEarningsModal } from '@/components/quarterly-earnings-modal';
-import { syncFitbitData, getFitbitLastSyncedAt, backfillFitbitHistory, refreshStalePastSnapshots } from '@/app/actions/fitbit';
-import { backfillScoreHistory } from '@/app/actions/score-history';
-import { syncWithingsData } from '@/app/actions/withings';
+import { useHybridAi } from '@/components/hybrid-ai-provider';
+import {
+  ExecutionReceiptBadge,
+  SecComplianceAlertPanel,
+} from '@/components/execution-receipt-badge';
+import {
+  runLocalAuditWithFallback,
+  SecPrivacyLockBlockedError,
+  type HybridExecutionReceipt,
+  type SecComplianceAlert,
+} from '@/lib/hybrid-ai';
 
-const ChatInterface = dynamic(() => import('@/components/chat-interface').then(m => ({ default: m.ChatInterface })), {
-  ssr: false,
-  loading: () => <div className="flex-1 flex items-center justify-center"><Loader2 className="w-8 h-8 text-primary animate-spin" /></div>,
-});
-const DashboardCards = dynamic(() => import('@/components/dashboard-cards').then(m => ({ default: m.DashboardCards })), {
-  ssr: false,
-  loading: () => <div className="flex-1 flex items-center justify-center"><Loader2 className="w-8 h-8 text-primary animate-spin" /></div>,
-});
-const HistoryView = dynamic(() => import('@/components/history-view').then(m => ({ default: m.HistoryView })), {
-  ssr: false,
-  loading: () => <div className="flex-1 flex items-center justify-center"><Loader2 className="w-8 h-8 text-primary animate-spin" /></div>,
-});
-const PreferencesView = dynamic(() => import('@/components/preferences-view').then(m => ({ default: m.PreferencesView })), {
-  ssr: false,
-  loading: () => <div className="flex-1 flex items-center justify-center"><Loader2 className="w-8 h-8 text-primary animate-spin" /></div>,
-});
-const AboutView = dynamic(() => import('@/components/about-view').then(m => ({ default: m.AboutView })), {
-  ssr: false,
-  loading: () => <div className="flex-1 flex items-center justify-center"><Loader2 className="w-8 h-8 text-primary animate-spin" /></div>,
-});
-const OnboardingTutorial = dynamic(() => import('@/components/onboarding-tutorial').then(m => ({ default: m.OnboardingTutorial })), {
-  ssr: false,
-});
-const PublicLanding = dynamic(() => import('@/components/public-landing').then(m => ({ default: m.PublicLanding })), {
-  ssr: false,
-});
+const ChatInterface = dynamic(
+  () => import('@/components/chat-interface').then((m) => ({ default: m.ChatInterface })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-[#C26D2D] animate-spin" />
+      </div>
+    ),
+  }
+);
+const DashboardCards = dynamic(
+  () => import('@/components/dashboard-cards').then((m) => ({ default: m.DashboardCards })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-[#C26D2D] animate-spin" />
+      </div>
+    ),
+  }
+);
+const HistoryView = dynamic(
+  () => import('@/components/history-view').then((m) => ({ default: m.HistoryView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-[#C26D2D] animate-spin" />
+      </div>
+    ),
+  }
+);
+const PreferencesView = dynamic(
+  () => import('@/components/preferences-view').then((m) => ({ default: m.PreferencesView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-[#C26D2D] animate-spin" />
+      </div>
+    ),
+  }
+);
+const AboutView = dynamic(
+  () => import('@/components/about-view').then((m) => ({ default: m.AboutView })),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-[#C26D2D] animate-spin" />
+      </div>
+    ),
+  }
+);
+const OnboardingTutorial = dynamic(
+  () => import('@/components/onboarding-tutorial').then((m) => ({ default: m.OnboardingTutorial })),
+  { ssr: false }
+);
+const PublicLanding = dynamic(
+  () => import('@/components/public-landing').then((m) => ({ default: m.PublicLanding })),
+  { ssr: false }
+);
 
-/** Must match SYNC_INTERVAL_MS in fitbit-sync.ts — 6 hours. */
-const SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+type CoasterTab = 'chat' | 'daily' | 'trends' | 'settings';
 
 export default function Home() {
   const { user, isUserLoading } = useUser();
+  const firebaseApp = useFirebaseApp();
   const auth = useAuth();
   const db = useFirestore();
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState('chat');
+  const {
+    isOnline,
+    secPrivacyLock,
+    setSecPrivacyLock,
+    warmNano,
+    recordReceipt,
+    setEarningsModalOpen,
+  } = useHybridAi();
+
+  const [activeTab, setActiveTab] = useState<CoasterTab>('chat');
   const [isAuditing, setIsAuditing] = useState(false);
+  const [vaultAuditSummary, setVaultAuditSummary] = useState<{
+    headline?: string;
+    summary: string;
+    receipt?: HybridExecutionReceipt;
+  } | null>(null);
+  const [vaultAlert, setVaultAlert] = useState<SecComplianceAlert | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
-  const [paywallOpen, setPaywallOpen] = useState(false);
-  const hasSyncedFitbit = useRef(false);
-  const hasBackfilledFitbit = useRef(false);
-  const hasBackfilledScores = useRef(false);
 
   // Pull-to-refresh state (Today tab)
   const [pullDistance, setPullDistance] = useState(0);
@@ -96,21 +164,17 @@ export default function Home() {
   const isPullCandidate = useRef(false);
   const pullDistanceRef = useRef(0);
   const isPullRefreshingRef = useRef(false);
-  // Gesture-classification dead-zone: the user must drag past this much in
-  // the downward direction before we commit to PTR. Anything less is treated
-  // as normal scrolling and never blocks the page.
   const PULL_COMMIT_PX = 16;
-  // Distance past the dead-zone the user has to keep pulling for the refresh
-  // to actually fire. Tuned to iOS Safari's native PTR feel.
   const PULL_THRESHOLD = 110;
 
-  const userDocRef = useMemoFirebase(() => user ? doc(db, 'users', user.uid) : null, [db, user]);
+  const userDocRef = useMemoFirebase(() => (user ? doc(db, 'users', user.uid) : null), [db, user]);
   const { data: healthData, isLoading: isHealthLoading } = useDoc<HealthData>(userDocRef);
 
-  const prefsDocRef = useMemoFirebase(() => user ? doc(db, 'users', user.uid, 'preferences', 'settings') : null, [db, user]);
+  const prefsDocRef = useMemoFirebase(
+    () => (user ? doc(db, 'users', user.uid, 'preferences', 'settings') : null),
+    [db, user]
+  );
   useDoc<UserPreferences>(prefsDocRef);
-
-  const entitlement = resolveClientEntitlement(user, healthData);
 
   useEffect(() => {
     if (user && db) {
@@ -119,93 +183,14 @@ export default function Home() {
     }
   }, [user, db]);
 
-  // Sync device data on load if the last sync was more than 6 hours ago
-  // (or if we've never synced). Runs once per session.
+  // Persist active tab across reloads
   useEffect(() => {
-    if (!user || !healthData?.isDeviceVerified || hasSyncedFitbit.current) return;
-    
-    // Skip Oura — it has its own sync cron and patterns.
-    // Google Health and legacy Fitbit both use syncFitbitData.
-    if (healthData?.connectedDevice === 'oura') return;
-    hasSyncedFitbit.current = true;
-
-    (async () => {
-      try {
-        const lastSynced = await getFitbitLastSyncedAt(user.uid);
-        const stale = !lastSynced || Date.now() - lastSynced >= SYNC_INTERVAL_MS;
-        if (stale) {
-          const localDate = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local TZ
-          
-          if (healthData?.connectedDevice === 'withings') {
-            await syncWithingsData(user.uid, localDate);
-          } else {
-            const result = await syncFitbitData(user.uid, localDate);
-            if (!result.success && result.reason === 'token_refresh_failed') {
-              console.warn('[AutoSync] Fitbit/Google Health token refresh failed silently.');
-            }
-          }
-        }
-      } catch (e) {
-        console.error('[AutoSync] Failed:', e);
-      }
-    })();
-  }, [user, healthData?.isDeviceVerified, healthData?.connectedDevice, toast]);
-
-  // Backfill historical Fitbit snapshots once per session if yesterday is missing.
-  // Silently fires in the background — no toast, no spinner.
-  useEffect(() => {
-    if (!user || !healthData?.isDeviceVerified || healthData?.connectedDevice === 'oura' || hasBackfilledFitbit.current) return;
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toLocaleDateString('en-CA');
-    const hasYesterday = !!healthData?.fitbitByDate?.[yesterdayStr];
-    if (hasYesterday) return; // already populated, skip
-    hasBackfilledFitbit.current = true;
-    backfillFitbitHistory(user.uid).catch(e => console.error('[BackfillFitbit] Failed:', e));
-  }, [user, healthData?.isDeviceVerified, healthData?.connectedDevice, healthData?.fitbitByDate]);
-
-  // Auto-score backdated days into the equity history once per session.
-  // Runs regardless of device — it scores any day with logged food/exercise,
-  // using device calorie-burn where available and BMR estimates beyond it.
-  useEffect(() => {
-    if (!user || !healthData || hasBackfilledScores.current) return;
-    hasBackfilledScores.current = true;
-    const localDate = new Date().toLocaleDateString('en-CA');
-    const tz = new Date().getTimezoneOffset();
-    // For Fitbit/Google users, first finalise any recent past days whose snapshot
-    // was captured mid-day (partial burn) so the corrected device burn is written
-    // to history BEFORE the equity recompute reads it. Ordering matters here:
-    // backfillScoreHistory scores from the stored per-day snapshots, so a stale
-    // snapshot would otherwise re-freeze the low provisional score.
-    const isFitbitLike =
-      healthData.isDeviceVerified &&
-      healthData.connectedDevice !== 'oura' &&
-      healthData.connectedDevice !== 'withings';
-    (async () => {
-      if (isFitbitLike) {
-        try {
-          await refreshStalePastSnapshots(user.uid, localDate, tz);
-        } catch (e) {
-          console.error('[RefreshStaleSnapshots] Failed:', e);
-        }
-      }
-      try {
-        await backfillScoreHistory(user.uid, localDate, 90);
-      } catch (e) {
-        console.error('[BackfillScores] Failed:', e);
-      }
-    })();
-  }, [user, healthData]);
-
-  // Persist active tab across page reloads (prevents native PTR from resetting to 'chat').
-  useEffect(() => {
-    const saved = sessionStorage.getItem('cfo_activeTab');
-    if (saved && ['chat', 'daily', 'history', 'assets', 'about'].includes(saved)) {
+    const saved = sessionStorage.getItem('coaster_activeTab') as CoasterTab | null;
+    if (saved && ['chat', 'daily', 'trends', 'settings'].includes(saved)) {
       setActiveTab(saved);
     }
 
-    // Check if tutorial has been seen
-    const tutorialSeen = localStorage.getItem('cfo_tutorialSeen');
+    const tutorialSeen = localStorage.getItem('coaster_tutorialSeen');
     if (!tutorialSeen && user) {
       setShowTutorial(true);
     }
@@ -213,60 +198,45 @@ export default function Home() {
 
   const handleTutorialComplete = () => {
     setShowTutorial(false);
-    localStorage.setItem('cfo_tutorialSeen', 'true');
+    localStorage.setItem('coaster_tutorialSeen', 'true');
   };
 
   const handleTabChange = useCallback((tab: string) => {
-    setActiveTab(tab);
-    sessionStorage.setItem('cfo_activeTab', tab);
+    const next = (['chat', 'daily', 'trends', 'settings'].includes(tab)
+      ? tab
+      : 'chat') as CoasterTab;
+    setActiveTab(next);
+    sessionStorage.setItem('coaster_activeTab', next);
   }, []);
 
-  // Keep the ref in sync so PTR handlers always see the latest value.
-  useEffect(() => { isPullRefreshingRef.current = isPullRefreshing; }, [isPullRefreshing]);
+  useEffect(() => {
+    isPullRefreshingRef.current = isPullRefreshing;
+  }, [isPullRefreshing]);
 
-  // Fitbit sync used by pull-to-refresh — stable ref pattern so the touch
-  // handlers registered once still call the latest version.
-  const doFitbitSync = useCallback(async () => {
+  const doCoasterRefresh = useCallback(async () => {
     if (!user) return;
     setIsPullRefreshing(true);
     isPullRefreshingRef.current = true;
     try {
-      const localDate = new Date().toLocaleDateString('en-CA');
-      
-      if (healthData?.connectedDevice === 'withings') {
-        const result = await syncWithingsData(user.uid, localDate);
-        if (result.success) {
-          toast({ title: 'Withings Synced', description: 'Calorie data refreshed.' });
-        } else {
-          toast({ variant: 'destructive', title: 'Sync Failed', description: 'Could not sync Withings data.' });
-        }
-        return;
-      }
-
-      const result = await syncFitbitData(user.uid, localDate);
-      if (result.success) {
-        toast({ title: 'Synced', description: 'Portfolio data updated.' });
-      } else if (result.reason === 'token_refresh_failed') {
-        toast({ variant: 'destructive', title: 'Sync Failed', description: 'Token expired — reconnect your device.' });
-      } else if (result.reason === 'no_credentials') {
-        toast({ title: 'Refreshed', description: 'Data is live from Firestore.' });
-      } else {
-        toast({ variant: 'destructive', title: 'Sync Failed', description: 'Could not reach the health API. Please try again.' });
-      }
+      await healthService.getHealthSummary(db, user.uid);
+      toast({
+        title: isOnline ? 'Coaster Synced' : 'Offline Cache Refreshed',
+        description: isOnline
+          ? 'Your Today tally and recent pours are up to date.'
+          : 'Loaded from local IndexedDB coaster persistence.',
+      });
     } finally {
       setIsPullRefreshing(false);
       isPullRefreshingRef.current = false;
     }
-  }, [user, toast, healthData?.connectedDevice]);
+  }, [user, db, isOnline, toast]);
 
-  const doFitbitSyncRef = useRef(doFitbitSync);
-  useEffect(() => { doFitbitSyncRef.current = doFitbitSync; }, [doFitbitSync]);
+  const doCoasterRefreshRef = useRef(doCoasterRefresh);
+  useEffect(() => {
+    doCoasterRefreshRef.current = doCoasterRefresh;
+  }, [doCoasterRefresh]);
 
-  // Custom pull-to-refresh on the Today tab.
-  // A touch at scrollTop=0 starts as a "candidate"; it only becomes a real
-  // pull once the user has dragged past PULL_COMMIT_PX downward without first
-  // moving upward. This dead-zone lets normal upward scroll-swipes through
-  // without blocking the page.
+  // Custom pull-to-refresh on Today tab
   useEffect(() => {
     const el = dailyScrollRef.current;
     if (!el || activeTab !== 'daily') return;
@@ -285,19 +255,12 @@ export default function Home() {
 
       const delta = e.touches[0].clientY - touchStartY.current;
 
-      // Classification phase: we haven't committed to PTR yet.
       if (!isPulling.current) {
-        // Any upward movement during the dead-zone means the user is scrolling.
-        // Abandon candidacy so the rest of the gesture is owned by the browser.
         if (delta < 0) {
           isPullCandidate.current = false;
           return;
         }
-        // Still in the dead-zone — don't intercept the gesture.
         if (delta < PULL_COMMIT_PX) return;
-        // Crossed the dead-zone going down. Only commit if we're still at the
-        // top of the scroll container — otherwise the user already scrolled
-        // somewhere and we shouldn't hijack the gesture.
         if (el.scrollTop !== 0) {
           isPullCandidate.current = false;
           return;
@@ -306,7 +269,6 @@ export default function Home() {
         isPullCandidate.current = false;
       }
 
-      // Active pull — drive the indicator.
       const effective = delta - PULL_COMMIT_PX;
       if (effective > 0 && el.scrollTop === 0) {
         e.preventDefault();
@@ -314,7 +276,6 @@ export default function Home() {
         pullDistanceRef.current = clamped;
         setPullDistance(clamped);
       } else if (effective <= 0) {
-        // User backed the pull off — release without firing.
         isPulling.current = false;
         pullDistanceRef.current = 0;
         setPullDistance(0);
@@ -329,7 +290,7 @@ export default function Home() {
       pullDistanceRef.current = 0;
       setPullDistance(0);
       if (dist >= PULL_THRESHOLD) {
-        doFitbitSyncRef.current();
+        doCoasterRefreshRef.current();
       }
     };
 
@@ -353,22 +314,20 @@ export default function Home() {
     };
   }, [activeTab]);
 
-  // Complete a redirect-based Google sign-in. In the native shell and in
-  // standalone PWAs the popup transport is unavailable, so sign-in navigates
-  // away and lands back here — this is where that round trip is resolved.
+  // Resolve redirect-based Google sign-in safely (required for WebView / standalone PWA)
   useEffect(() => {
     let cancelled = false;
     getRedirectResult(auth)
-      .then(result => {
+      .then((result) => {
         if (cancelled || !result) return;
         toast({
-          title: 'Portfolio Secured',
-          description: 'Identity verified. Full ledger access granted.',
+          title: 'Coaster Connected',
+          description: 'Signed in with Google. Your pours and trends stay synced.',
         });
       })
       .catch((e: any) => {
         if (cancelled || isUserCancelledError(e)) return;
-        toast({ variant: 'destructive', title: 'Verification Failed', description: e.message });
+        toast({ variant: 'destructive', title: 'Sign-In Issue', description: e.message });
       })
       .finally(() => {
         if (!cancelled) setIsLoggingIn(false);
@@ -378,77 +337,13 @@ export default function Home() {
     };
   }, [auth, toast]);
 
-  // Show toast for Fitbit OAuth callback result, Stripe checkout, and Friends & Family ?gift= links.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const giftParam = params.get('gift') || params.get('invite') || params.get('code');
-    if (giftParam) {
-      localStorage.setItem('cfo_pending_gift_code', giftParam.trim().toUpperCase());
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-
-    const pendingCode = localStorage.getItem('cfo_pending_gift_code');
-    if (pendingCode && user) {
-      localStorage.removeItem('cfo_pending_gift_code');
-      user.getIdToken().then((idToken) =>
-        redeemFounderCodeAction(idToken, pendingCode).then((res) => {
-          if (res.success) {
-            toast({
-              title: res.tier === 'credit_pack' ? '+25 Friends & Family AI Credits Added!' : 'Partner Access Unlocked!',
-              description: res.message || 'Your bonus AI CFO coaching credits are active on your ledger.',
-            });
-          }
-        }).catch(() => {})
-      );
-    }
-
-    if (params.get('fitbit_sync') === 'success') {
-      toast({ title: 'Fitbit Linked', description: 'Hardware verified. Device data is now trusted.' });
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (params.get('withings_sync') === 'success') {
-      toast({ title: 'Withings Linked', description: 'Withings hardware verified. Calorie data is now trusted.' });
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (params.get('error')?.startsWith('fitbit_')) {
-      toast({ variant: 'destructive', title: 'Fitbit Link Failed', description: 'Check your Fitbit credentials and try again.' });
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (params.get('error')?.startsWith('withings_')) {
-      toast({ variant: 'destructive', title: 'Withings Link Failed', description: 'Check your Withings credentials and try again.' });
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (params.get('checkout') === 'success') {
-      const sessionId = params.get('session_id');
-      if (sessionId && user) {
-        user.getIdToken().then((idToken) =>
-          fetch('/api/stripe/verify-session', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${idToken}`,
-            },
-            body: JSON.stringify({ sessionId }),
-          }).catch(() => {})
-        );
-      }
-      toast({
-        title: 'Executive Retainer Active',
-        description: 'Welcome aboard, Partner. Unlimited AI CFO coaching, voice dictation, and Ledger Analyst are now unlocked.',
-      });
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (params.get('checkout') === 'cancelled') {
-      toast({
-        title: 'Checkout Closed',
-        description: 'No charge was made. Your Zero-AI Cockpit remains 100% free forever.',
-      });
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-  }, [toast, user]);
-
   const handleAnonymousLogin = async () => {
     setIsLoggingIn(true);
     try {
       await signInAnonymously(auth);
-      toast({ title: "Quick Entry Authorized", description: "Orientation briefing initiated." });
+      toast({ title: 'Welcome to Coaster', description: 'Your private table is ready.' });
     } catch (e: any) {
-      toast({ variant: "destructive", title: "Access Denied", description: e.message });
+      toast({ variant: 'destructive', title: 'Could not open Coaster', description: e.message });
     } finally {
       setIsLoggingIn(false);
     }
@@ -458,16 +353,12 @@ export default function Home() {
     setIsLoggingIn(true);
     const provider = new GoogleAuthProvider();
 
-    // Inside the native shell / a standalone PWA there is no popup to open, so
-    // go straight to redirect rather than burning an attempt on a call that is
-    // guaranteed to fail with auth/popup-blocked.
     if (shouldUseRedirectSignIn()) {
       try {
         await signInWithRedirect(auth, provider);
-        // Navigation is under way; the result is picked up on return.
         return;
       } catch (e: any) {
-        toast({ variant: 'destructive', title: 'Verification Failed', description: e.message });
+        toast({ variant: 'destructive', title: 'Sign-In Issue', description: e.message });
         setIsLoggingIn(false);
         return;
       }
@@ -475,26 +366,31 @@ export default function Home() {
 
     try {
       await signInWithPopup(auth, provider);
-      toast({ title: "Portfolio Secured", description: "Identity verified. Full ledger access granted." });
+      toast({
+        title: 'Coaster Connected',
+        description: 'Signed in with Google. Synced across devices.',
+      });
       setIsLoggingIn(false);
     } catch (e: any) {
       if (isUserCancelledError(e)) {
         setIsLoggingIn(false);
         return;
       }
-      // The popup transport is unavailable in this browser — fall back to
-      // redirect instead of surfacing a dead end.
       if (isPopupUnavailableError(e)) {
         try {
           await signInWithRedirect(auth, provider);
           return;
         } catch (redirectError: any) {
-          toast({ variant: 'destructive', title: 'Verification Failed', description: redirectError.message });
+          toast({
+            variant: 'destructive',
+            title: 'Sign-In Issue',
+            description: redirectError.message,
+          });
           setIsLoggingIn(false);
           return;
         }
       }
-      toast({ variant: "destructive", title: "Verification Failed", description: e.message });
+      toast({ variant: 'destructive', title: 'Sign-In Issue', description: e.message });
       setIsLoggingIn(false);
     }
   };
@@ -508,14 +404,17 @@ export default function Home() {
         await linkWithRedirect(user, provider);
         return;
       } catch (error: any) {
-        toast({ variant: 'destructive', title: 'Sync Failed', description: error.message });
+        toast({ variant: 'destructive', title: 'Sync Issue', description: error.message });
         return;
       }
     }
 
     try {
       await linkWithPopup(user, provider);
-      toast({ title: "Portfolio Secured", description: "Your assets are now linked to your Google account." });
+      toast({
+        title: 'Coaster Saved to Google',
+        description: 'Your guest history is now linked to your Google account.',
+      });
     } catch (error: any) {
       if (isUserCancelledError(error)) return;
       if (isPopupUnavailableError(error)) {
@@ -523,131 +422,207 @@ export default function Home() {
           await linkWithRedirect(user, provider);
           return;
         } catch (redirectError: any) {
-          toast({ variant: 'destructive', title: 'Sync Failed', description: redirectError.message });
+          toast({ variant: 'destructive', title: 'Sync Issue', description: redirectError.message });
           return;
         }
       }
-      toast({ variant: "destructive", title: "Sync Failed", description: error.message });
+      toast({ variant: 'destructive', title: 'Sync Issue', description: error.message });
     }
   };
 
-  const handleInternalAudit = async () => {
+  const handlePrivacyVaultAudit = async () => {
     if (!user) return;
     setIsAuditing(true);
-    toast({ title: "Audit Initialized", description: "Running CFO diagnostic suite..." });
+    setVaultAlert(null);
+    handleTabChange('settings');
 
-    const idToken = await user.getIdToken();
-    await runInternalAudit(db, user.uid, (test, success, message) => {
-      toast({
-        variant: success ? "default" : "destructive",
-        title: `Audit ${test} ${success ? 'Passed' : 'Failed'}`,
-        description: message
+    try {
+      const recentLogs = await healthService
+        .queryFoodLog(db, user.uid, undefined, 90)
+        .catch(() => []);
+
+      const res = (await runLocalAuditWithFallback({
+        firebaseApp,
+        logs: recentLogs,
+        strictNanoOnly: secPrivacyLock,
+      })) as {
+        headline?: string;
+        summary?: string;
+        replyText?: string;
+        receipt?: HybridExecutionReceipt;
+      };
+
+      const summary =
+        res.summary ||
+        res.replyText ||
+        'On-device 30-day drink & clear-day review finished inside your browser.';
+      setVaultAuditSummary({
+        headline: res.headline || 'Privacy Vault 30-Day Review (On-Device)',
+        summary,
+        receipt: res.receipt,
       });
-    }, idToken);
-
-    setIsAuditing(false);
+      if (res.receipt) recordReceipt(res.receipt);
+      toast({
+        title: 'Privacy Vault Review Complete',
+        description: 'Executed privately on-device with zero cloud transmission.',
+      });
+    } catch (err) {
+      if (err instanceof SecPrivacyLockBlockedError) {
+        setVaultAlert(err.alert);
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'On-Device Review Unavailable',
+          description:
+            err instanceof Error
+              ? err.message
+              : 'Warm Local Nano Engine first to run strict on-device audits.',
+        });
+      }
+    } finally {
+      setIsAuditing(false);
+    }
   };
 
   if (!user && !isUserLoading) {
     return (
-      <PublicLanding 
-        onLogin={handleGoogleLogin} 
-        onAnonymousLogin={handleAnonymousLogin} 
-        isLoggingIn={isLoggingIn} 
+      <PublicLanding
+        onLogin={handleGoogleLogin}
+        onAnonymousLogin={handleAnonymousLogin}
+        isLoggingIn={isLoggingIn}
       />
     );
   }
 
   if (isUserLoading || (user && !healthData && isHealthLoading)) {
     return (
-      <div className="h-screen bg-background flex flex-col items-center justify-center space-y-6">
-        <Loader2 className="w-12 h-12 text-primary animate-spin" />
+      <div className="h-screen bg-[#FAF6F0] flex flex-col items-center justify-center space-y-5">
+        <Loader2 className="w-10 h-10 text-[#C26D2D] animate-spin" />
         <div className="text-center space-y-1">
-          <p className="text-[12px] font-black uppercase tracking-[0.3em] text-muted-foreground">Initializing Terminal</p>
-          <p className="text-xs font-bold text-primary italic">Syncing Portfolio Assets...</p>
+          <p className="text-sm font-semibold text-[#1F1B18] font-['Newsreader',Georgia,serif]">
+            Setting out your Coaster...
+          </p>
+          <p className="text-xs text-[#6E6359]">Loading local ledger &amp; recent trends</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] md:h-auto md:min-h-0 md:flex-1 w-full md:max-w-6xl mx-auto bg-background md:shadow-2xl md:border-x overflow-hidden">
-      <OnboardingTutorial 
-        isOpen={showTutorial} 
-        onComplete={handleTutorialComplete} 
-      />
-      <PaywallModal
-        isOpen={paywallOpen}
-        onClose={() => setPaywallOpen(false)}
-        onSwitchToZeroAi={() => handleTabChange('daily')}
-        auditsUsed={entitlement.aiAuditsUsed}
-        freeLimit={entitlement.freeLimit}
-      />
+    <div className="flex flex-col h-[100dvh] md:h-auto md:min-h-0 md:flex-1 w-full md:max-w-6xl mx-auto bg-[#FAF6F0] md:shadow-xl md:border-x border-[#E8DFD1] overflow-hidden">
+      <OnboardingTutorial isOpen={showTutorial} onComplete={handleTutorialComplete} />
       <QuarterlyEarningsModal />
-      <header className="px-3.5 py-2 md:p-4 md:px-6 flex items-center justify-between glass-morphism border-b z-10 shrink-0">
+
+      {/* Top Workspace Header */}
+      <header className="px-3.5 py-2.5 md:px-6 md:py-3 flex items-center justify-between bg-[#FFFDF9]/90 backdrop-blur-md border-b border-[#E8DFD1] z-10 shrink-0">
         <div className="flex items-center gap-2.5 md:gap-3 min-w-0">
-          <div className="p-1.5 md:p-2 bg-primary text-white rounded-xl shadow-md shrink-0">
-            <Briefcase className="w-4 h-4 md:w-5 md:h-5" />
+          <div className="w-9 h-9 rounded-full bg-[#C26D2D] text-[#FFFDF9] flex items-center justify-center shadow-xs shrink-0 ring-2 ring-[#C26D2D]/15">
+            <Sunrise className="w-4 h-4 md:w-5 md:h-5" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-lg md:text-xl font-black tracking-tighter leading-none text-foreground italic uppercase">the CFO</h1>
-            <p className="text-[9px] md:text-[10px] font-black text-muted-foreground uppercase mt-0.5 tracking-widest opacity-70 truncate">
-              Chief Fitness Officer <span className="hidden sm:inline opacity-50 font-mono normal-case">· {process.env.NEXT_PUBLIC_BUILD_ID ?? 'dev'}</span>
+            <h1 className="text-lg md:text-xl font-semibold tracking-tight leading-none text-[#1F1B18] font-['Newsreader',Georgia,serif]">
+              Coaster
+            </h1>
+            <p className="text-[10px] md:text-[11px] font-medium text-[#6E6359] mt-0.5 truncate">
+              Mindful Drink Tally · Sunny
+              <span className="hidden sm:inline opacity-60 font-mono">
+                {' '}
+                · {process.env.NEXT_PUBLIC_BUILD_ID ?? 'live'}
+              </span>
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 md:gap-4 shrink-0">
+        <div className="flex items-center gap-2.5 md:gap-3.5 shrink-0">
+          {/* Firestore Offline Persistence Status Pill */}
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold border ${
+              isOnline
+                ? 'border-[#3F7D58]/30 bg-[#EAF3ED] text-[#2B5C3F]'
+                : 'border-[#D97706]/40 bg-[#FEF3C7] text-[#9A4E16]'
+            }`}
+            title={
+              isOnline
+                ? 'Firestore persistence active and synced'
+                : 'Working offline with Firestore IndexedDB local cache'
+            }
+          >
+            {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+            <span className="hidden sm:inline">
+              {isOnline ? 'Synced' : 'Offline Cache'}
+            </span>
+          </span>
+
           {!user?.isAnonymous && (
-            <div className="hidden md:flex flex-col items-end mr-1">
-              <p className="text-[10px] font-black uppercase tracking-widest text-primary italic">
-                {entitlement.tier === 'founder' ? 'Founder Immunity' : entitlement.badgeLabel}
+            <div className="hidden md:flex flex-col items-end mr-0.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-[#3F7D58]">
+                Synced Account
               </p>
-              <p className="text-xs font-bold text-foreground truncate max-w-[160px]">{user?.displayName || user?.email}</p>
+              <p className="text-xs font-medium text-[#1F1B18] truncate max-w-[160px]">
+                {user?.displayName || user?.email}
+              </p>
             </div>
           )}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="rounded-full hover:bg-muted relative overflow-hidden h-9 w-9 md:h-10 md:w-10 border-2 border-primary/20 p-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full hover:bg-[#FAF6F0] relative overflow-hidden h-9 w-9 md:h-10 md:w-10 border border-[#E8DFD1] p-0"
+              >
                 {isAuditing ? (
-                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                  <Loader2 className="w-5 h-5 animate-spin text-[#C26D2D]" />
                 ) : (
                   <Avatar className="h-full w-full">
                     <AvatarImage src={user?.photoURL || undefined} />
-                    <AvatarFallback className="bg-secondary text-primary font-black text-xs">
-                      {user?.displayName?.charAt(0) || user?.email?.charAt(0) || <UserIcon className="w-4 h-4" />}
+                    <AvatarFallback className="bg-[#FAF6F0] text-[#C26D2D] font-semibold text-xs">
+                      {user?.displayName?.charAt(0) || user?.email?.charAt(0) || (
+                        <UserIcon className="w-4 h-4" />
+                      )}
                     </AvatarFallback>
                   </Avatar>
                 )}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-64">
-              <DropdownMenuLabel className="flex flex-col gap-1 p-3">
-                <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
-                  {entitlement.badgeLabel}
+            <DropdownMenuContent align="end" className="w-64 bg-[#FFFDF9] border-[#E8DFD1]">
+              <DropdownMenuLabel className="flex flex-col gap-0.5 p-3">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-[#6E6359]">
+                  {user?.isAnonymous ? 'Guest Coaster' : 'Google Account'}
                 </span>
-                <span className="text-sm font-bold text-foreground truncate">{user?.displayName || user?.email || 'Anonymous Auditor'}</span>
+                <span className="text-sm font-semibold text-[#1F1B18] truncate">
+                  {user?.displayName || user?.email || 'Guest Table'}
+                </span>
               </DropdownMenuLabel>
-              <DropdownMenuSeparator />
+              <DropdownMenuSeparator className="bg-[#E8DFD1]" />
               {user?.isAnonymous && (
-                <DropdownMenuItem onClick={handleUpgradeAccount} className="flex items-center gap-2 text-primary font-black uppercase text-xs p-3 cursor-pointer">
+                <DropdownMenuItem
+                  onClick={handleUpgradeAccount}
+                  className="flex items-center gap-2 text-[#C26D2D] font-semibold text-xs p-3 cursor-pointer"
+                >
                   <Cloud className="w-4 h-4" />
-                  <span>Secure Portfolio (Google)</span>
+                  <span>Save Coaster with Google</span>
                 </DropdownMenuItem>
               )}
-              {!entitlement.isExempt && (
-                <DropdownMenuItem onClick={() => setPaywallOpen(true)} className="flex items-center gap-2 text-primary font-black uppercase text-xs p-3 cursor-pointer">
-                  <Sparkles className="w-4 h-4" />
-                  <span>Retain AI CFO / Enter Code</span>
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={handleInternalAudit} className="flex items-center gap-2 font-bold uppercase text-xs p-3 cursor-pointer">
-                <ShieldCheck className="w-4 h-4" />
-                <span>Run Internal Audit</span>
+              <DropdownMenuItem
+                onClick={handlePrivacyVaultAudit}
+                className="flex items-center gap-2 font-medium text-xs p-3 cursor-pointer text-[#1F1B18]"
+              >
+                <ShieldCheck className="w-4 h-4 text-[#3F7D58]" />
+                <span>Run Privacy Vault Review</span>
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => signOut(auth)} className="text-destructive font-bold uppercase text-xs p-3 cursor-pointer">
+              <DropdownMenuItem
+                onClick={() => setShowTutorial(true)}
+                className="flex items-center gap-2 font-medium text-xs p-3 cursor-pointer text-[#1F1B18]"
+              >
+                <Sparkles className="w-4 h-4 text-[#D97706]" />
+                <span>Coaster Quick Tour</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="bg-[#E8DFD1]" />
+              <DropdownMenuItem
+                onClick={() => signOut(auth)}
+                className="text-[#9A4E16] font-medium text-xs p-3 cursor-pointer"
+              >
                 <LogOut className="w-4 h-4 mr-2" />
                 Sign Out
               </DropdownMenuItem>
@@ -655,28 +630,36 @@ export default function Home() {
           </DropdownMenu>
         </div>
       </header>
+
       <LocalAiTelemetryBar />
 
       <main className="flex-1 flex flex-col overflow-hidden relative">
-        <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col h-full overflow-hidden">
+        <Tabs
+          value={activeTab}
+          onValueChange={handleTabChange}
+          className="flex-1 flex flex-col h-full overflow-hidden"
+        >
           <div className="flex-1 relative overflow-hidden h-full">
             {activeTab === 'chat' && (
               <div className="h-full w-full absolute inset-0 flex flex-col">
                 <ChatInterface onSwitchToMetrics={() => handleTabChange('daily')} />
               </div>
             )}
+
             {activeTab === 'daily' && (
-              <div ref={dailyScrollRef} className="h-full w-full absolute inset-0 overflow-y-auto overscroll-y-contain">
-                {/* Pull-to-refresh indicator */}
+              <div
+                ref={dailyScrollRef}
+                className="h-full w-full absolute inset-0 overflow-y-auto overscroll-y-contain"
+              >
                 <div
                   className="flex items-center justify-center overflow-hidden transition-all duration-150"
-                  style={{ height: isPullRefreshing ? 52 : Math.round(pullDistance * 0.55) }}
+                  style={{ height: isPullRefreshing ? 48 : Math.round(pullDistance * 0.55) }}
                 >
                   {isPullRefreshing ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                    <Loader2 className="w-5 h-5 animate-spin text-[#C26D2D]" />
                   ) : pullDistance > 0 ? (
                     <RefreshCw
-                      className="w-5 h-5 text-primary/60"
+                      className="w-5 h-5 text-[#C26D2D]/70"
                       style={{
                         transform: `rotate(${Math.min((pullDistance / PULL_THRESHOLD) * 180, 180)}deg)`,
                         opacity: Math.min(pullDistance / PULL_THRESHOLD, 1),
@@ -687,43 +670,138 @@ export default function Home() {
                 <DashboardCards data={healthData} isLoading={isHealthLoading} />
               </div>
             )}
-            {activeTab === 'history' && (
-              <div className="h-full w-full absolute inset-0 overflow-y-auto">
+
+            {activeTab === 'trends' && (
+              <div className="h-full w-full absolute inset-0 overflow-y-auto p-3 sm:p-6 space-y-4">
+                <div className="max-w-5xl mx-auto rounded-2xl border border-[#E8DFD1] bg-[#FFFDF9] p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                  <div className="space-y-1">
+                    <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#C26D2D]">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Cloud + On-Device Hybrid Insight</span>
+                    </div>
+                    <h2 className="text-lg font-semibold text-[#1F1B18] font-['Newsreader',Georgia,serif]">
+                      Sunny&apos;s 30-Day Trend Spotter
+                    </h2>
+                    <p className="text-xs text-[#6E6359]">
+                      Spot weekly patterns, clear-day streaks, beverage mix, and fresh zero-proof
+                      swap ideas.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => setEarningsModalOpen(true)}
+                    className="rounded-xl bg-[#C26D2D] hover:bg-[#A85B22] text-[#FFFDF9] text-xs font-semibold px-4 h-10 shrink-0 gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Open 30D Trend Spotter
+                  </Button>
+                </div>
+
                 <HistoryView />
               </div>
             )}
-            {activeTab === 'assets' && (
-              <div className="h-full w-full absolute inset-0 overflow-y-auto">
+
+            {activeTab === 'settings' && (
+              <div className="h-full w-full absolute inset-0 overflow-y-auto p-3 sm:p-6 space-y-6">
+                {/* Privacy Vault On-Device Audit Card */}
+                <div className="max-w-4xl mx-auto rounded-2xl border border-[#3F7D58]/30 bg-[#FFFDF9] p-4 sm:p-5 space-y-3 shadow-xs">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#3F7D58]">
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>InferenceMode.ONLY_ON_DEVICE</span>
+                      </div>
+                      <h2 className="text-base font-semibold text-[#1F1B18]">
+                        Privacy Vault On-Device Review
+                      </h2>
+                      <p className="text-xs text-[#6E6359]">
+                        Synthesize your 30-day drink &amp; clear-day summary locally with Chrome
+                        Gemini Nano—zero cloud transmission.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={isAuditing}
+                      onClick={handlePrivacyVaultAudit}
+                      className="rounded-xl bg-[#3F7D58] hover:bg-[#316345] text-[#FFFDF9] text-xs font-semibold h-10 px-4 shrink-0 gap-1.5"
+                    >
+                      {isAuditing ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                      )}
+                      Run Local Audit
+                    </Button>
+                  </div>
+
+                  {vaultAlert && (
+                    <SecComplianceAlertPanel
+                      alert={vaultAlert}
+                      onWarmNano={warmNano}
+                      onDisableLock={() => {
+                        setSecPrivacyLock(false);
+                        setVaultAlert(null);
+                      }}
+                    />
+                  )}
+
+                  {vaultAuditSummary && (
+                    <div className="rounded-xl border border-[#3F7D58]/30 bg-[#EAF3ED]/75 p-3.5 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-[#2B5C3F]">
+                          {vaultAuditSummary.headline}
+                        </span>
+                        {vaultAuditSummary.receipt && (
+                          <ExecutionReceiptBadge
+                            compact
+                            inferenceSource={vaultAuditSummary.receipt.inferenceSource}
+                            latencyMs={vaultAuditSummary.receipt.latencyMs}
+                          />
+                        )}
+                      </div>
+                      <p className="text-xs text-[#1F1B18] leading-relaxed">
+                        {vaultAuditSummary.summary}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <PreferencesView />
-              </div>
-            )}
-            {activeTab === 'about' && (
-              <div className="h-full w-full absolute inset-0 overflow-y-auto">
                 <AboutView />
               </div>
             )}
           </div>
 
-          <TabsList className="grid grid-cols-5 h-14 md:h-20 bg-card border-t rounded-none shrink-0 p-0 gap-0 pb-[env(safe-area-inset-bottom)]">
-            <TabsTrigger value="chat" className="flex flex-col gap-1 md:gap-1.5 h-full rounded-none data-[state=active]:bg-muted/50 transition-all">
-              <MessageSquare className="w-4 h-4 md:w-5 md:h-5" />
-              <span className="text-[8.5px] md:text-[9px] font-black uppercase tracking-widest">Coach</span>
+          {/* 4-Tab Bottom Navigation Bar */}
+          <TabsList className="grid grid-cols-4 h-14 md:h-20 bg-[#FFFDF9] border-t border-[#E8DFD1] rounded-none shrink-0 p-0 gap-0 pb-[env(safe-area-inset-bottom)]">
+            <TabsTrigger
+              value="chat"
+              className="flex flex-col gap-1 h-full rounded-none text-[#6E6359] data-[state=active]:bg-[#FAF6F0] data-[state=active]:text-[#C26D2D] transition-all"
+            >
+              <MessageCircle className="w-4 h-4 md:w-5 md:h-5" />
+              <span className="text-[10px] font-semibold tracking-wide">Sunny</span>
             </TabsTrigger>
-            <TabsTrigger value="daily" className="flex flex-col gap-1 md:gap-1.5 h-full rounded-none data-[state=active]:bg-muted/50 transition-all">
-              <Target className="w-4 h-4 md:w-5 md:h-5" />
-              <span className="text-[8.5px] md:text-[9px] font-black uppercase tracking-widest">Metrics</span>
+            <TabsTrigger
+              value="daily"
+              className="flex flex-col gap-1 h-full rounded-none text-[#6E6359] data-[state=active]:bg-[#FAF6F0] data-[state=active]:text-[#C26D2D] transition-all"
+            >
+              <GlassWater className="w-4 h-4 md:w-5 md:h-5" />
+              <span className="text-[10px] font-semibold tracking-wide">Today</span>
             </TabsTrigger>
-            <TabsTrigger value="history" className="flex flex-col gap-1 md:gap-1.5 h-full rounded-none data-[state=active]:bg-muted/50 transition-all">
-              <History className="w-4 h-4 md:w-5 md:h-5" />
-              <span className="text-[8.5px] md:text-[9px] font-black uppercase tracking-widest">Ledger</span>
+            <TabsTrigger
+              value="trends"
+              className="flex flex-col gap-1 h-full rounded-none text-[#6E6359] data-[state=active]:bg-[#FAF6F0] data-[state=active]:text-[#C26D2D] transition-all"
+            >
+              <TrendingUp className="w-4 h-4 md:w-5 md:h-5" />
+              <span className="text-[10px] font-semibold tracking-wide">Trends</span>
             </TabsTrigger>
-            <TabsTrigger value="assets" className="flex flex-col gap-1 md:gap-1.5 h-full rounded-none data-[state=active]:bg-muted/50 transition-all">
+            <TabsTrigger
+              value="settings"
+              className="flex flex-col gap-1 h-full rounded-none text-[#6E6359] data-[state=active]:bg-[#FAF6F0] data-[state=active]:text-[#C26D2D] transition-all"
+            >
               <Settings className="w-4 h-4 md:w-5 md:h-5" />
-              <span className="text-[8.5px] md:text-[9px] font-black uppercase tracking-widest">Settings</span>
-            </TabsTrigger>
-            <TabsTrigger value="about" className="flex flex-col gap-1 md:gap-1.5 h-full rounded-none data-[state=active]:bg-muted/50 transition-all">
-              <Info className="w-4 h-4 md:w-5 md:h-5" />
-              <span className="text-[8.5px] md:text-[9px] font-black uppercase tracking-widest">About</span>
+              <span className="text-[10px] font-semibold tracking-wide">Settings</span>
             </TabsTrigger>
           </TabsList>
         </Tabs>
