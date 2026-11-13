@@ -1,11 +1,11 @@
 /**
- * @fileOverview Zero-DNS Gmail IMAP Inbound Reply Poller for CFO Outreach.
+ * @fileOverview Zero-DNS Gmail IMAP Inbound Reply Poller for Sunny · Coaster.
  *
- * Outbound briefings set `Reply-To: the CFO <localpart+cfo@gmail.com>`.
+ * Outbound briefings set `Reply-To: Sunny · Coaster <localpart+coaster@gmail.com>`.
  * This poller queries IMAP (`imap.gmail.com:993`) ONLY for unread messages
- * addressed to that `+cfo@` alias — never touching personal inbox mail —
- * parses meal replies via `processOutreachFreeTextMeal`, marks them Seen,
- * and replies with an updated Eat-By confirmation email.
+ * addressed to that `+coaster@` alias — never touching personal inbox mail —
+ * parses drink & photo replies via `processOutreachFreeTextMeal`, marks them Seen,
+ * and replies with an updated Coaster tally confirmation email.
  */
 
 import { createHash } from 'crypto';
@@ -231,20 +231,26 @@ export async function pollGmailOutreachReplies(): Promise<{
           if (!meta) continue;
 
           const headerText = meta.headers ? meta.headers.toString('utf8') : '';
-          const headerLower = headerText.toLowerCase();
 
-          // Safety guard 1: strictly require "+cfo@" in To / Delivered-To or envelope.to
+          // Safety guard 1: strictly require "+coaster@" in To / Delivered-To or envelope.to
           const envToMatch = (meta.envelope?.to ?? []).some((addr) =>
-            (addr.address || '').toLowerCase().includes('+cfo@'),
+            (addr.address || '').toLowerCase().includes('+coaster@'),
           );
-          if (!envToMatch && !headerLower.includes('+cfo@')) {
+          const toHeaderMatch = /^(to|delivered-to):[^\n]*\+coaster@/im.test(headerText);
+          if (!envToMatch && !toHeaderMatch) {
             continue;
           }
 
-          // Safety guard 2: never re-ingest our own outbound briefings ("From: the CFO <...>")
+          // Safety guard 2: never re-ingest our own outbound check-ins ("From: Sunny · Coaster <...>")
           const fromEntry = meta.envelope?.from?.[0];
           const fromName = (fromEntry?.name || '').trim().toLowerCase();
-          if (fromName === 'the cfo' || /^from:\s*"?the cfo"?\s*</im.test(headerText)) {
+          if (
+            fromName.includes('sunny · coaster') ||
+            fromName.includes('sunny - coaster') ||
+            fromName === 'coaster' ||
+            fromName === 'sunny' ||
+            /^from:\s*"?[^<\n]*(sunny\s*[·\-]\s*coaster|coaster)"?\s*</im.test(headerText)
+          ) {
             continue;
           }
 
@@ -326,7 +332,7 @@ export async function pollGmailOutreachReplies(): Promise<{
             ? /^re:/i.test(origSubject)
               ? origSubject
               : `Re: ${origSubject}`
-            : `the CFO: ${result.headline}`;
+            : `Sunny · Coaster: ${result.headline}`;
 
           await sendOutreachReplyConfirmationEmail({
             to: fromAddr,
@@ -339,6 +345,12 @@ export async function pollGmailOutreachReplies(): Promise<{
             lastFoodLine: result.lastFoodLine,
             loggedFoodId: result.loggedFoodId,
             localDate: result.localDate,
+            loggedUnits: result.loggedUnits,
+            todayUnits: result.todayUnits,
+            sevenDayAvg: result.sevenDayAvg,
+            alternativeSuggested: result.alternativeSuggested,
+            isClearDay: result.isClearDay,
+            isZeroProof: result.isZeroProof,
             loggedMacros: result.loggedMacros,
             updatedHeadline: result.updatedHeadline,
             updatedBody: result.updatedBody,

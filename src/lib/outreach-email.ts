@@ -1,15 +1,16 @@
 /**
- * @fileOverview Outbound Email formatter & dual-provider (Gmail SMTP / Resend) dispatcher
- * for 3x/day CFO Briefings. Includes RFC 8058 native 1-click List-Unsubscribe headers
- * and stateless HMAC quick-actions.
+ * @fileOverview Gmail SMTP (primary, free personal inbox with +coaster@ plus-addressing)
+ * + Resend HTTP fallback email transport & HTML template renderer for
+ * Sunny · Coaster briefings and "A New Journey" welcome emails.
  */
 
 import nodemailer from 'nodemailer';
 import { Resend } from 'resend';
-import { SITE_URL } from './site';
+import type { OutreachCadence } from './health-service';
+import { formatUnits } from './health-service';
 import { signOutreachToken, type OutreachActionType } from './outreach-auth';
 import type { ComposedOutreachMessage } from './outreach-composer';
-import type { OutreachCadence } from './health-service';
+import { SITE_URL } from './site';
 
 export interface GmailOutreachConfig {
   user: string;
@@ -17,9 +18,14 @@ export interface GmailOutreachConfig {
   plusReplyTo: string;
 }
 
+function getCoasterSiteUrl(): string {
+  return (process.env.NEXT_PUBLIC_SITE_URL || SITE_URL).replace(/\/+$/, '');
+}
+
 /**
- * Resolves Gmail App Password config if present (automatically stripping spaces
- * from Google's 4x4 `abcd efgh ijkl mnop` display format).
+ * Resolves Gmail SMTP + Coaster-isolated plus-addressing from env.
+ * Uses `${localPart}+coaster@${domain}` so Coaster never crosses streams
+ * with any legacy inbox tags.
  */
 export function resolveGmailOutreachConfig(): GmailOutreachConfig | null {
   const appPassword = (process.env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
@@ -27,7 +33,7 @@ export function resolveGmailOutreachConfig(): GmailOutreachConfig | null {
   const user = (process.env.GMAIL_USER || 'nicholas.switzer@gmail.com').trim().toLowerCase();
   const [localPart, domain = 'gmail.com'] = user.split('@');
   const cleanLocal = localPart.replace(/\+.*$/, '');
-  const plusReplyTo = `${cleanLocal}+cfo@${domain}`;
+  const plusReplyTo = `${cleanLocal}+coaster@${domain}`;
   return { user, appPassword, plusReplyTo };
 }
 
@@ -53,8 +59,8 @@ export async function deliverRawOutreachEmail(params: {
       });
 
       await transporter.sendMail({
-        from: process.env.OUTREACH_FROM_EMAIL || `the CFO <${gmail.user}>`,
-        replyTo: process.env.OUTREACH_REPLY_TO_EMAIL || `the CFO <${gmail.plusReplyTo}>`,
+        from: process.env.OUTREACH_FROM_EMAIL || `Sunny · Coaster <${gmail.user}>`,
+        replyTo: process.env.OUTREACH_REPLY_TO_EMAIL || `Sunny · Coaster <${gmail.plusReplyTo}>`,
         to: params.to,
         subject: params.subject,
         html: params.html,
@@ -63,15 +69,16 @@ export async function deliverRawOutreachEmail(params: {
       });
 
       return { success: true, provider: 'gmail' };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error('[OutreachEmail] Gmail SMTP send error:', err);
-      return { success: false, provider: 'gmail', error: err?.message ?? String(err) };
+      return { success: false, provider: 'gmail', error: message };
     }
   }
 
   if (process.env.RESEND_API_KEY) {
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const from = process.env.OUTREACH_FROM_EMAIL || 'the CFO <reports@updates.thecfo.app>';
+    const from = process.env.OUTREACH_FROM_EMAIL || 'Sunny · Coaster <sunny@coaster.app>';
     const replyTo = process.env.OUTREACH_REPLY_TO_EMAIL || undefined;
 
     try {
@@ -90,9 +97,10 @@ export async function deliverRawOutreachEmail(params: {
         return { success: false, provider: 'resend', error: error.message || String(error) };
       }
       return { success: true, provider: 'resend' };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error('[OutreachEmail] Unexpected Resend error:', err);
-      return { success: false, provider: 'resend', error: err?.message ?? String(err) };
+      return { success: false, provider: 'resend', error: message };
     }
   }
 
@@ -114,39 +122,25 @@ export function buildOutreachActionUrl(params: {
   date?: string;
   window?: 'morning' | 'midday' | 'night';
   foodId?: string;
+  cadence?: OutreachCadence;
+  nonce?: string;
 }): string {
   const token = signOutreachToken(params);
-  return `${SITE_URL}/api/outreach/action?token=${encodeURIComponent(token)}`;
+  return `${getCoasterSiteUrl()}/api/outreach/action?token=${encodeURIComponent(token)}`;
 }
 
-export function renderOutreachEmailHtml(params: {
-  uid: string;
-  cadence: OutreachCadence;
-  composed: ComposedOutreachMessage;
-}): { html: string; text: string; unsubscribeUrl: string } {
-  const { uid, cadence, composed } = params;
-  const windowLabels = {
-    morning: 'MORNING BRIEFING',
-    midday: 'MIDDAY PULSE',
-    night: 'EVENING CLOSEOUT',
-  } as const;
+const EMAIL_MOBILE_HEAD_CSS = `<style>
+      *,*::before,*::after{box-sizing:border-box;}
+      html,body{margin:0;padding:0;width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%;}
+      img{max-width:100%;height:auto;}
+      a{word-break:break-word;}
+    </style>`;
 
-  const toneColors = {
-    good: { bg: '#ecfdf5', border: '#10b981', pill: '#059669', text: '#065f46' },
-    soon: { bg: '#fffbeb', border: '#f59e0b', pill: '#d97706', text: '#92400e' },
-    urgent: { bg: '#fef2f2', border: '#ef4444', pill: '#dc2626', text: '#991b1b' },
-  } as const;
-  const palette = toneColors[composed.statusTone];
-
-  const unsubscribeUrl = buildOutreachActionUrl({ uid, action: 'unsubscribe' });
-  const pause7dUrl = buildOutreachActionUrl({ uid, action: 'pause_7d', date: composed.localDate });
-  const toggleCadenceAction: OutreachActionType =
-    cadence === '3x' ? 'morning_only' : 'resume_3x';
-  const toggleCadenceLabel =
-    cadence === '3x' ? 'Switch to Morning-Only (1x/day)' : 'Resume 3x/Day Pings';
-  const toggleCadenceUrl = buildOutreachActionUrl({ uid, action: toggleCadenceAction });
-
-  const actionButtonsHtml = composed.quickActions
+function renderActionButtonsHtml(
+  uid: string,
+  composed: ComposedOutreachMessage,
+): string {
+  const buttons = composed.quickActions
     .map((btn) => {
       const url = buildOutreachActionUrl({
         uid,
@@ -155,100 +149,173 @@ export function renderOutreachEmailHtml(params: {
         window: composed.window,
       });
       const isPrimary = btn.style === 'primary';
-      const btnStyle = isPrimary
-        ? 'background:#0f172a;color:#ffffff;border:1px solid #0f172a;'
-        : 'background:#ffffff;color:#0f172a;border:1px solid #cbd5e1;';
-      return `<a href="${url}" style="display:inline-block;margin:4px 6px 4px 0;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:700;text-decoration:none;${btnStyle}">${escapeHtml(btn.label)}</a>`;
+      const bg = isPrimary ? '#C26D2D' : '#F3ECE2';
+      const fg = isPrimary ? '#FFFDF9' : '#1F1B18';
+      const border = isPrimary ? '#C26D2D' : '#DED2C0';
+      return `<a href="${url}" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin:0;padding:11px 16px;border-radius:10px;background:${bg};color:${fg};border:1px solid ${border};font-size:14px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">${escapeHtml(btn.label)}</a>`;
     })
     .join('');
+  return `<div style="display:flex;flex-wrap:wrap;gap:8px;box-sizing:border-box;">${buttons}</div>`;
+}
 
-  const bannerHtml = composed.autoSunsetBanner
-    ? `<div style="background:#f1f5f9;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#475569;">
-         ${escapeHtml(composed.autoSunsetBanner)}
-       </div>`
+function formatHourLabel(h: number): string {
+  const clean = ((Math.round(h) % 24) + 24) % 24;
+  if (clean === 0) return '12:00 AM';
+  if (clean === 12) return '12:00 PM';
+  return clean < 12 ? `${clean}:00 AM` : `${clean - 12}:00 PM`;
+}
+
+function describeCadenceSchedule(params: {
+  cadence: OutreachCadence;
+  timezone: string;
+  morningHour?: number;
+  middayHour?: number;
+  nightHour?: number;
+}): string {
+  const mLabel = formatHourLabel(params.morningHour ?? 9);
+  const dLabel = formatHourLabel(params.middayHour ?? 13);
+  const nLabel = formatHourLabel(params.nightHour ?? 19);
+
+  switch (params.cadence) {
+    case '2x':
+      return `${mLabel} & ${nLabel} (${params.timezone})`;
+    case 'daily':
+    case 'morning_only':
+      return `${mLabel} daily (${params.timezone})`;
+    case 'weekly':
+      return `Sundays around ${nLabel} (${params.timezone})`;
+    case '3x':
+      return `${mLabel}, ${dLabel}, and ${nLabel} (${params.timezone})`;
+    case 'pause':
+      return `Paused (${params.timezone})`;
+  }
+}
+
+export function renderOutreachEmailHtml(params: {
+  uid: string;
+  cadence: OutreachCadence;
+  composed: ComposedOutreachMessage;
+}): { html: string; text: string; unsubscribeUrl: string } {
+  const { uid, cadence, composed } = params;
+
+  const tonePalette = {
+    good: { bg: '#F2F7F4', border: '#3F7D58', pill: '#3F7D58' },
+    soon: { bg: '#FDF5EB', border: '#C26D2D', pill: '#C26D2D' },
+    urgent: { bg: '#FDF5EB', border: '#C26D2D', pill: '#9A4E1A' },
+  } as const;
+  const palette = tonePalette[composed.statusTone] ?? tonePalette.good;
+
+  const unsubscribeUrl = buildOutreachActionUrl({ uid, action: 'unsubscribe' });
+  const pauseUrl = buildOutreachActionUrl({ uid, action: 'pause', date: composed.localDate });
+  const viewLedgerUrl = buildOutreachActionUrl({ uid, action: 'view_ledger' });
+  const isSingleDaily = cadence === 'daily' || cadence === 'morning_only';
+  const toggleCadenceUrl = buildOutreachActionUrl({
+    uid,
+    action: 'set_cadence',
+    cadence: isSingleDaily ? '2x' : 'daily',
+  });
+  const toggleCadenceLabel = isSingleDaily
+    ? 'Switch to 2x/day (Morning + Evening)'
+    : 'Switch to 1x Daily (Morning only)';
+
+  const actionButtonsHtml = renderActionButtonsHtml(uid, composed);
+
+  const swapBlockHtml = composed.swapSuggestion
+    ? `
+      <div style="margin:14px 0 0;padding:12px 14px;border-radius:12px;background:#F6EFE5;border:1px solid #E8DFD1;font-size:13px;line-height:1.5;color:#4A3F35;">
+        <strong style="color:#9A4E1A;">Sunny's Zero-Proof Booth Pick:</strong> ${escapeHtml(composed.swapSuggestion)}
+      </div>`
     : '';
 
-  const preheaderText = `${composed.lastFoodLine} What else did you have? Reply in plain English or attach a photo.`;
-  const html = `<!DOCTYPE html>
+  const sunsetHtml = composed.autoSunsetBanner
+    ? `<div style="margin:12px 0 0;padding:10px 14px;border-radius:10px;background:#FDF5EB;border:1px solid #E9C89B;font-size:12px;color:#7C4618;">${escapeHtml(composed.autoSunsetBanner)}</div>`
+    : '';
+
+  const html = `<!doctype html>
 <html>
-  <body style="margin:0;padding:16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
-    <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f8fafc;">
-      ${escapeHtml(preheaderText)}&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;
-    </div>
-    <div style="max-width:540px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:24px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-        <span style="font-size:11px;font-weight:800;letter-spacing:0.12em;color:${palette.pill};text-transform:uppercase;">
-          the CFO · ${windowLabels[composed.window]}
-        </span>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>${escapeHtml(composed.subject)}</title>
+    ${EMAIL_MOBILE_HEAD_CSS}
+  </head>
+  <body style="margin:0;padding:16px 10px;background:#FAF6F0;color:#1F1B18;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;box-sizing:border-box;width:100%;">
+    <div style="max-width:560px;width:100%;box-sizing:border-box;margin:0 auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:18px;overflow:hidden;box-shadow:0 6px 24px rgba(64,45,25,0.06);">
+      <div style="padding:18px 18px;background:#F5EFE6;border-bottom:1px solid #E8DFD1;box-sizing:border-box;">
+        <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#9A4E1A;">Sunny · Coaster &middot; ${escapeHtml(composed.localDate)}</div>
+        <h1 style="margin:6px 0 0;font-size:21px;line-height:1.3;color:#1F1B18;">${escapeHtml(composed.headline)}</h1>
       </div>
 
-      ${bannerHtml}
-
-      <div style="background:${palette.bg};border-left:4px solid ${palette.border};border-radius:10px;padding:16px;margin-bottom:14px;">
-        <div style="font-size:19px;font-weight:800;line-height:1.3;color:#0f172a;margin-bottom:8px;">
-          ${escapeHtml(composed.headline)}
-        </div>
-        <div style="font-size:14px;line-height:1.55;color:#334155;">
+      <div style="padding:18px 18px;box-sizing:border-box;">
+        <div style="padding:14px 16px;border-radius:12px;background:${palette.bg};border:1px solid ${palette.border};font-size:16px;line-height:1.6;color:#1F1B18;box-sizing:border-box;">
           ${escapeHtml(composed.body)}
         </div>
-      </div>
 
-      <div style="font-size:13px;line-height:1.55;color:#0f172a;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;margin-bottom:14px;">
-        <strong>${escapeHtml(composed.lastFoodLine)}</strong><br/>
-        <span style="color:#334155;"><strong>What else did you have?</strong> Just hit <strong>Reply</strong> in plain English — or <strong>attach a meal or label photo</strong> — and I&apos;ll put it on the books.</span>
-      </div>
-
-      <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:14px;">
-        ${escapeHtml(composed.metricsLine)}
-      </div>
-
-      <div style="margin-bottom:16px;">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;margin-bottom:6px;">
-          Or 1-Tap Quick Update
+        <div style="margin:14px 0 0;padding:12px 14px;border-radius:10px;background:#FAF6F0;border:1px solid #E8DFD1;font-size:14px;line-height:1.5;color:#4A3F35;box-sizing:border-box;">
+          <strong style="color:#1F1B18;">Coaster tally:</strong> ${escapeHtml(composed.metricsLine)}
         </div>
-        ${actionButtonsHtml}
+
+        <p style="margin:12px 0 0;font-size:14px;line-height:1.5;color:#6E6359;">
+          ${escapeHtml(composed.lastFoodLine)}
+        </p>
+
+        ${swapBlockHtml}
+
+        <div style="margin:18px 0 0;">
+          <div style="font-size:11px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;color:#6E6359;margin-bottom:8px;">1-Tap Pour Check-In</div>
+          ${actionButtonsHtml}
+        </div>
+
+        <div style="margin:16px 0 0;">
+          <a href="${viewLedgerUrl}" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:11px 18px;border-radius:10px;background:#1F1B18;color:#FFFDF9;font-size:14px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;">Open Live Coaster &amp; Trends &rarr;</a>
+        </div>
+
+        ${sunsetHtml}
+
+        <p style="margin:18px 0 0;font-size:16px;line-height:1.6;color:#4A3F35;">
+          Or simply <strong style="color:#1F1B18;">reply to this email</strong> in plain English (<em>&ldquo;2 hazy IPAs at trivia&rdquo;</em>, <em>&ldquo;Glass of pinot last night&rdquo;</em>, <em>&ldquo;Clear day&rdquo;</em>) &mdash; I handle <strong style="color:#1F1B18;">pics &amp; more</strong> (bottle/can labels, bar receipts, tap lists, menus, or zero-proof swap questions).
+        </p>
       </div>
 
-      <div style="font-size:12px;color:#64748b;line-height:1.5;border-top:1px solid #f1f5f9;padding-top:12px;">
-        <a href="${buildOutreachActionUrl({ uid, action: 'view_ledger' })}" style="color:#059669;font-weight:700;text-decoration:underline;">View Live Personal Ledger</a>
-        &nbsp;·&nbsp;
-        <a href="${SITE_URL}" style="color:#2563eb;text-decoration:underline;">cfofitness.app</a>
-      </div>
-
-      <div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;line-height:1.6;">
-        Free automated CFO briefings · Always $0, easy to cancel:<br/>
-        <a href="${toggleCadenceUrl}" style="color:#64748b;text-decoration:underline;">${escapeHtml(toggleCadenceLabel)}</a>
-        &nbsp;·&nbsp;
-        <a href="${pause7dUrl}" style="color:#64748b;text-decoration:underline;">Pause 7 Days</a>
-        &nbsp;·&nbsp;
-        <a href="${unsubscribeUrl}" style="color:#dc2626;font-weight:700;text-decoration:underline;">1-Click Cancel</a>
+      <div style="padding:14px 18px;background:#FAF6F0;border-top:1px solid #E8DFD1;font-size:13px;color:#6E6359;line-height:1.8;display:flex;flex-wrap:wrap;gap:6px 12px;box-sizing:border-box;">
+        <a href="${viewLedgerUrl}" style="color:#9A4E1A;font-weight:700;text-decoration:underline;">Live Coaster &amp; Trends</a>
+        <a href="${toggleCadenceUrl}" style="color:#6E6359;text-decoration:underline;">${escapeHtml(toggleCadenceLabel)}</a>
+        <a href="${pauseUrl}" style="color:#6E6359;text-decoration:underline;">Pause Check-ins</a>
+        <a href="${unsubscribeUrl}" style="color:#6E6359;text-decoration:underline;">Unsubscribe</a>
       </div>
     </div>
   </body>
 </html>`;
 
-  const text = [
-    `the CFO — ${windowLabels[composed.window]}`,
-    '',
+  const textLines = [
+    `Sunny · Coaster (${composed.localDate})`,
     composed.headline,
+    '',
     composed.body,
     '',
+    `Tally: ${composed.metricsLine}`,
     composed.lastFoodLine,
-    'What else did you have? Reply in plain English or attach a meal / nutrition-label photo.',
+    ...(composed.swapSuggestion ? ['', `Sunny's Zero-Proof Pick: ${composed.swapSuggestion}`] : []),
     '',
-    composed.metricsLine,
-    '',
-    'Quick Actions:',
+    '1-Tap Check-In Links:',
     ...composed.quickActions.map(
-      (btn) => `- ${btn.label}: ${buildOutreachActionUrl({ uid, action: btn.action, date: composed.localDate, window: composed.window })}`,
+      (btn) =>
+        `- ${btn.label}: ${buildOutreachActionUrl({
+          uid,
+          action: btn.action,
+          date: composed.localDate,
+          window: composed.window,
+        })}`,
     ),
     '',
-    `${toggleCadenceLabel}: ${toggleCadenceUrl}`,
-    `Pause 7 Days: ${pause7dUrl}`,
-    `1-Click Cancel (Instant): ${unsubscribeUrl}`,
-  ].join('\n');
+    `Open Live Coaster & Trends: ${viewLedgerUrl}`,
+    `Reply directly in plain English ("Glass of pinot last night", "Clear day") or attach pics (receipt, tap list, bottle, can) and more.`,
+    '',
+    `Pause check-ins: ${pauseUrl}`,
+    `Unsubscribe: ${unsubscribeUrl}`,
+  ];
 
-  return { html, text, unsubscribeUrl };
+  return { html, text: textLines.join('\n'), unsubscribeUrl };
 }
 
 export async function sendOutreachEmail(params: {
@@ -256,7 +323,7 @@ export async function sendOutreachEmail(params: {
   uid: string;
   cadence: OutreachCadence;
   composed: ComposedOutreachMessage;
-}): Promise<{ success: boolean; error?: string }> {
+}): Promise<{ success: boolean; provider?: 'gmail' | 'resend'; error?: string }> {
   const { html, text, unsubscribeUrl } = renderOutreachEmailHtml(params);
 
   return deliverRawOutreachEmail({
@@ -272,9 +339,8 @@ export async function sendOutreachEmail(params: {
 }
 
 /**
- * Sends a direct, lightweight conversational agent reply email (threaded via In-Reply-To
- * when replying to an inbound email) stating what was logged, the updated Eat-By call,
- * the last food on record, and reminding the user they can reply with text or photos.
+ * Sends a warm Sunny · Coaster confirmation email directly in the same Gmail thread
+ * after parsing the user's inbound reply text or photo.
  */
 export async function sendOutreachReplyConfirmationEmail(params: {
   to: string;
@@ -287,6 +353,12 @@ export async function sendOutreachReplyConfirmationEmail(params: {
   inReplyToMessageId?: string;
   loggedFoodId?: string;
   localDate?: string;
+  loggedUnits?: number;
+  todayUnits?: number;
+  sevenDayAvg?: number;
+  alternativeSuggested?: string;
+  isClearDay?: boolean;
+  isZeroProof?: boolean;
   loggedMacros?: {
     calories: number;
     proteinG: number;
@@ -299,106 +371,113 @@ export async function sendOutreachReplyConfirmationEmail(params: {
   statusTone?: 'good' | 'soon' | 'urgent';
 }): Promise<{ success: boolean }> {
   const unsubscribeUrl = buildOutreachActionUrl({ uid: params.uid, action: 'unsubscribe' });
-  const pause7dUrl = buildOutreachActionUrl({
+  const pauseUrl = buildOutreachActionUrl({
     uid: params.uid,
-    action: 'pause_7d',
+    action: 'pause',
     date: params.localDate,
   });
+  const viewLedgerUrl = buildOutreachActionUrl({ uid: params.uid, action: 'view_ledger' });
 
   const undoUrl =
     params.loggedFoodId && params.localDate
       ? buildOutreachActionUrl({
           uid: params.uid,
-          action: 'undo_food',
+          action: 'undo',
           date: params.localDate,
           foodId: params.loggedFoodId,
         })
-      : null;
+      : undefined;
 
-  const loggedLeadHtml = params.loggedMacros
-    ? `<p style="margin:0 0 12px 0;font-size:15px;line-height:1.55;color:#0f172a;">
-         <strong>${escapeHtml(params.headline)}</strong>
-         <span style="color:#059669;font-weight:700;"> (+${params.loggedMacros.calories} kcal &middot; ${params.loggedMacros.proteinG}g P &middot; ${params.loggedMacros.carbsG}g C &middot; ${params.loggedMacros.fatG}g F)</span>.${params.agentReply ? ` ${escapeHtml(params.agentReply)}` : ''}
-       </p>`
-    : `<p style="margin:0 0 12px 0;font-size:15px;line-height:1.55;color:#0f172a;">
-         ${escapeHtml(params.agentReply || params.detail)}
-       </p>`;
+  const cleanSubject = params.subject.toLowerCase().startsWith('re:')
+    ? params.subject
+    : `Re: ${params.subject}`;
 
-  const eatByParagraphHtml =
-    params.updatedHeadline && params.updatedBody
-      ? `<p style="margin:0 0 12px 0;font-size:14px;line-height:1.55;color:#1e293b;">
-           <strong>Next up: ${escapeHtml(params.updatedHeadline)}</strong> — ${escapeHtml(params.updatedBody)}${params.metricsLine ? `<br/><span style="font-size:12px;color:#64748b;">(${escapeHtml(params.metricsLine)})</span>` : ''}
-         </p>`
-      : '';
+  const loggedBadge = params.isClearDay
+    ? 'Clear Day · 0.0u'
+    : params.isZeroProof
+      ? 'Zero-Proof · 0.0u'
+      : typeof params.loggedUnits === 'number'
+        ? `${formatUnits(params.loggedUnits)} logged`
+        : undefined;
 
-  const promptParagraphHtml = params.lastFoodLine
-    ? `<p style="margin:0 0 14px 0;font-size:14px;line-height:1.55;color:#0f172a;background:#f8fafc;border-left:3px solid #0f172a;padding:10px 12px;border-radius:6px;">
-         <strong>${escapeHtml(params.lastFoodLine)}</strong><br/>
-         What else did you have? Reply here in plain English — or attach a meal photo / nutrition label pic anytime.
-       </p>`
+  const tallyLine =
+    params.metricsLine ||
+    (typeof params.todayUnits === 'number' || typeof params.sevenDayAvg === 'number'
+      ? `Today ${formatUnits(params.todayUnits ?? 0)} · 7d avg ${formatUnits(params.sevenDayAvg ?? 0)}/day`
+      : undefined);
+
+  const swapHtml = params.alternativeSuggested
+    ? `<div style="margin:12px 0 0;padding:11px 14px;border-radius:10px;background:#F6EFE5;border:1px solid #E8DFD1;font-size:13px;color:#4A3F35;">
+         <strong style="color:#9A4E1A;">Zero-Proof Idea:</strong> ${escapeHtml(params.alternativeSuggested)}
+       </div>`
     : '';
 
-  const html = `<!DOCTYPE html>
+  const html = `<!doctype html>
 <html>
-  <body style="margin:0;padding:14px;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
-    <div style="max-width:540px;">
-      ${loggedLeadHtml}
-      ${eatByParagraphHtml}
-      ${promptParagraphHtml}
-      <p style="margin:14px 0 0 0;padding-top:10px;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.6;">
-        ${undoUrl ? `<a href="${undoUrl}" style="color:#b91c1c;font-weight:700;text-decoration:underline;">Undo this entry</a> &middot; ` : ''}<a href="${SITE_URL}" style="color:#2563eb;text-decoration:underline;">Open CFO Ledger</a> &middot; <a href="${pause7dUrl}" style="color:#64748b;text-decoration:underline;">Pause 7d</a> &middot; <a href="${unsubscribeUrl}" style="color:#dc2626;text-decoration:underline;">1-Click Cancel</a>
-      </p>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>${escapeHtml(cleanSubject)}</title>
+    ${EMAIL_MOBILE_HEAD_CSS}
+  </head>
+  <body style="margin:0;padding:16px 10px;background:#FAF6F0;color:#1F1B18;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;box-sizing:border-box;width:100%;">
+    <div style="max-width:560px;width:100%;box-sizing:border-box;margin:0 auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:16px;padding:18px 18px;">
+      <div style="font-size:11px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#3F7D58;">Sunny · Coaster Update</div>
+      <h2 style="margin:6px 0 0;font-size:20px;line-height:1.3;color:#1F1B18;">${escapeHtml(params.headline)}</h2>
+      ${loggedBadge ? `<div style="display:inline-block;margin:10px 0 0;padding:5px 11px;border-radius:999px;background:#FDF5EB;border:1px solid #E9C89B;font-size:13px;font-weight:700;color:#9A4E1A;">${escapeHtml(loggedBadge)}</div>` : ''}
+      ${params.agentReply ? `<p style="margin:12px 0 0;font-size:16px;line-height:1.6;color:#1F1B18;">${escapeHtml(params.agentReply)}</p>` : ''}
+      <p style="margin:10px 0 0;font-size:15px;line-height:1.6;color:#4A3F35;">${escapeHtml(params.detail)}</p>
+      ${tallyLine ? `<div style="margin:12px 0 0;padding:11px 14px;border-radius:10px;background:#FAF6F0;border:1px solid #E8DFD1;font-size:14px;color:#1F1B18;box-sizing:border-box;"><strong>Running Tally:</strong> ${escapeHtml(tallyLine)}</div>` : ''}
+      ${params.lastFoodLine ? `<p style="margin:10px 0 0;font-size:13px;color:#6E6359;">${escapeHtml(params.lastFoodLine)}</p>` : ''}
+      ${swapHtml}
+      <div style="margin:16px 0 0;display:flex;flex-wrap:wrap;gap:8px;box-sizing:border-box;">
+        <a href="${viewLedgerUrl}" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:11px 16px;border-radius:10px;background:#1F1B18;color:#FFFDF9;font-size:14px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;">Open Live Coaster &amp; Trends &rarr;</a>
+        ${undoUrl ? `<a href="${undoUrl}" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:11px 15px;border-radius:10px;background:#F3ECE2;border:1px solid #DED2C0;color:#1F1B18;font-size:14px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;">Undo Last Entry</a>` : ''}
+      </div>
+      <div style="margin:18px 0 0;padding-top:12px;border-top:1px solid #E8DFD1;font-size:13px;color:#6E6359;display:flex;flex-wrap:wrap;gap:6px 12px;">
+        <a href="${pauseUrl}" style="color:#6E6359;">Pause check-ins</a>
+        <a href="${unsubscribeUrl}" style="color:#6E6359;">Unsubscribe</a>
+      </div>
     </div>
   </body>
 </html>`;
 
-  const textLines = [
-    params.loggedMacros
-      ? `${params.headline} (+${params.loggedMacros.calories} kcal · ${params.loggedMacros.proteinG}g P · ${params.loggedMacros.carbsG}g C · ${params.loggedMacros.fatG}g F).${params.agentReply ? ` ${params.agentReply}` : ''}`
-      : params.agentReply || params.detail,
-    ...(params.updatedHeadline && params.updatedBody
-      ? [
-          '',
-          `Next up: ${params.updatedHeadline} — ${params.updatedBody}`,
-          ...(params.metricsLine ? [`(${params.metricsLine})`] : []),
-        ]
-      : []),
-    ...(params.lastFoodLine
-      ? [
-          '',
-          params.lastFoodLine,
-          'What else did you have? Reply in plain English or attach a meal / nutrition-label photo anytime.',
-        ]
-      : []),
+  const text = [
+    `Sunny · Coaster Update: ${params.headline}`,
+    ...(loggedBadge ? [loggedBadge] : []),
+    ...(params.agentReply ? ['', params.agentReply] : []),
     '',
-    ...(undoUrl ? [`Undo this entry: ${undoUrl}`] : []),
-    `Open CFO Ledger: ${SITE_URL}`,
-    `1-Click Cancel: ${unsubscribeUrl}`,
-  ];
-
-  const headers: Record<string, string> = {
-    'List-Unsubscribe': `<${unsubscribeUrl}>`,
-    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-  };
-  if (params.inReplyToMessageId) {
-    headers['In-Reply-To'] = params.inReplyToMessageId;
-    headers['References'] = params.inReplyToMessageId;
-  }
+    params.detail,
+    ...(tallyLine ? [`Running Tally: ${tallyLine}`] : []),
+    ...(params.lastFoodLine ? [params.lastFoodLine] : []),
+    ...(params.alternativeSuggested ? [`Zero-Proof Idea: ${params.alternativeSuggested}`] : []),
+    '',
+    `Open Live Coaster & Trends: ${viewLedgerUrl}`,
+    ...(undoUrl ? [`Undo last entry: ${undoUrl}`] : []),
+    `Pause: ${pauseUrl} | Unsubscribe: ${unsubscribeUrl}`,
+  ].join('\n');
 
   const res = await deliverRawOutreachEmail({
     to: params.to,
-    subject: params.subject,
+    subject: cleanSubject,
     html,
-    text: textLines.join('\n'),
-    headers,
+    text,
+    ...(params.inReplyToMessageId
+      ? {
+          headers: {
+            'In-Reply-To': params.inReplyToMessageId,
+            References: params.inReplyToMessageId,
+          },
+        }
+      : {}),
   });
 
   return { success: res.success };
 }
 
 /**
- * Renders the Welcome & How-It-Works enrollment email combined with the user's
- * first live Eat-By briefing so new enrollees immediately understand the system.
+ * Literary "A New Journey" welcome email introducing Sunny, NIAAA Standard Drink
+ * Units, plain-English & photo replies, 1-tap drink buttons, and Zero-Login Live Coaster.
  */
 export function renderOutreachWelcomeEmailHtml(params: {
   uid: string;
@@ -411,158 +490,149 @@ export function renderOutreachWelcomeEmailHtml(params: {
   recipientFirstName?: string;
 }): { subject: string; html: string; text: string; unsubscribeUrl: string } {
   const { uid, cadence, timezone, composed, recipientFirstName } = params;
-  const cleanFirstName = recipientFirstName?.trim();
-  const fmtHour = (h: number) => {
-    const clean = ((h % 24) + 24) % 24;
-    if (clean === 0) return '12:00 AM';
-    if (clean === 12) return '12:00 PM';
-    return clean < 12 ? `${clean}:00 AM` : `${clean - 12}:00 PM`;
-  };
-  const mLabel = fmtHour(params.morningHour ?? 7);
-  const dLabel = fmtHour(params.middayHour ?? 12);
-  const nLabel = fmtHour(params.nightHour ?? 19);
-  const scheduleSummary =
-    cadence === '3x'
-      ? `${mLabel}, ${dLabel}, and ${nLabel} (${timezone})`
-      : `${mLabel} daily (${timezone})`;
+  const cleanFirstName = (recipientFirstName || '').trim();
+  const displayGreeting = cleanFirstName ? cleanFirstName : 'Friend';
 
-  const toneColors = {
-    good: { bg: '#ecfdf5', border: '#10b981', pill: '#059669' },
-    soon: { bg: '#fffbeb', border: '#f59e0b', pill: '#d97706' },
-    urgent: { bg: '#fef2f2', border: '#ef4444', pill: '#dc2626' },
-  } as const;
-  const palette = toneColors[composed.statusTone];
+  const scheduleSummary = describeCadenceSchedule({
+    cadence,
+    timezone,
+    morningHour: params.morningHour,
+    middayHour: params.middayHour,
+    nightHour: params.nightHour,
+  });
 
   const unsubscribeUrl = buildOutreachActionUrl({ uid, action: 'unsubscribe' });
-  const pause7dUrl = buildOutreachActionUrl({ uid, action: 'pause_7d', date: composed.localDate });
+  const pauseUrl = buildOutreachActionUrl({ uid, action: 'pause', date: composed.localDate });
   const viewLedgerUrl = buildOutreachActionUrl({ uid, action: 'view_ledger' });
-  const toggleCadenceAction: OutreachActionType =
-    cadence === '3x' ? 'morning_only' : 'resume_3x';
-  const toggleCadenceLabel =
-    cadence === '3x' ? 'Switch to Morning-Only (1x/day)' : 'Resume 3x/Day Pings';
-  const toggleCadenceUrl = buildOutreachActionUrl({ uid, action: toggleCadenceAction });
+  const isSingleDaily = cadence === 'daily' || cadence === 'morning_only';
+  const toggleCadenceUrl = buildOutreachActionUrl({
+    uid,
+    action: 'set_cadence',
+    cadence: isSingleDaily ? '2x' : 'daily',
+  });
+  const toggleCadenceLabel = isSingleDaily
+    ? 'Switch to 2x/day (Morning + Evening)'
+    : 'Switch to 1x Daily (Morning only)';
 
-  const actionButtonsHtml = composed.quickActions
-    .map((btn) => {
-      const url = buildOutreachActionUrl({
-        uid,
-        action: btn.action,
-        date: composed.localDate,
-        window: composed.window,
-      });
-      const isPrimary = btn.style === 'primary';
-      const btnStyle = isPrimary
-        ? 'background:#0f172a;color:#ffffff;border:1px solid #0f172a;'
-        : 'background:#ffffff;color:#0f172a;border:1px solid #cbd5e1;';
-      return `<a href="${url}" style="display:inline-block;margin:4px 6px 4px 0;padding:10px 14px;border-radius:10px;font-size:13px;font-weight:700;text-decoration:none;${btnStyle}">${escapeHtml(btn.label)}</a>`;
-    })
-    .join('');
+  const actionButtonsHtml = renderActionButtonsHtml(uid, composed);
 
   const subject = cleanFirstName
-    ? `Welcome aboard, ${cleanFirstName}! Your CFO Briefing · ${composed.headline}`
-    : `Welcome to the CFO Briefing · ${composed.headline}`;
-  const greetingTitle = cleanFirstName
-    ? `Welcome aboard, ${cleanFirstName} — your automated "Eat-By" clock is live ($0).`
-    : `Your automated "Eat-By" clock is live ($0).`;
+    ? `A New Journey, ${cleanFirstName} — Pull up a seat with Sunny · Coaster`
+    : 'A New Journey — Pull up a seat with Sunny · Coaster';
 
-  const html = `<!DOCTYPE html>
+  const html = `<!doctype html>
 <html>
-  <body style="margin:0;padding:16px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
-    <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:24px;">
-      <div style="font-size:11px;font-weight:800;letter-spacing:0.12em;color:#059669;text-transform:uppercase;margin-bottom:8px;">
-        the CFO · WELCOME &amp; FIRST LIVE BRIEFING
-      </div>
-      <div style="font-size:21px;font-weight:900;line-height:1.25;color:#0f172a;margin-bottom:8px;">
-        ${escapeHtml(greetingTitle)}
-      </div>
-      <div style="font-size:14px;line-height:1.55;color:#334155;margin-bottom:14px;">
-        No app or login required — everything works right inside your inbox. Briefings arrive at <strong>${escapeHtml(scheduleSummary)}</strong> answering one question: <strong>what your body is mostly burning right now (fat, carbs, or muscle) and when to eat next.</strong>
-      </div>
-      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;margin-bottom:18px;font-size:13px;line-height:1.55;color:#334155;">
-        <div style="font-weight:800;color:#0f172a;margin-bottom:4px;">How it works in 10 seconds:</div>
-        1. <strong>Just hit Reply</strong> in plain English whenever you eat (e.g. <em>&ldquo;3 eggs, sourdough toast, and coffee at 9am&rdquo;</em>) or attach a meal / nutrition-label photo.<br/>
-        2. <strong>Ask or adjust anytime</strong> — reply with <em>&ldquo;remove the toast&rdquo;</em>, <em>&ldquo;ping me at 8am EST&rdquo;</em>, or <em>&ldquo;morning only&rdquo;</em> and the CFO updates on the spot.<br/>
-        3. <strong>Zero-login web ledger</strong> — tap <a href="${viewLedgerUrl}" style="color:#059669;font-weight:700;text-decoration:underline;">View Live Personal Ledger</a> anytime to see your itemized meals or remove an entry in one tap.
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>${escapeHtml(subject)}</title>
+    ${EMAIL_MOBILE_HEAD_CSS}
+  </head>
+  <body style="margin:0;padding:16px 10px;background:#FAF6F0;color:#1F1B18;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;box-sizing:border-box;width:100%;">
+    <div style="max-width:560px;width:100%;box-sizing:border-box;margin:0 auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:20px;overflow:hidden;box-shadow:0 8px 30px rgba(64,45,25,0.07);">
+      <div style="padding:22px 18px;background:#F5EFE6;border-bottom:1px solid #E8DFD1;box-sizing:border-box;">
+        <div style="font-size:11px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:#9A4E1A;">Sunny &middot; Coaster</div>
+        <h1 style="margin:8px 0 6px;font-size:24px;line-height:1.25;color:#1F1B18;font-family:Georgia,'Times New Roman',serif;">A New Journey, ${escapeHtml(displayGreeting)}</h1>
+        <p style="margin:0;font-size:15px;line-height:1.5;color:#6E6359;">Fresh coasters, honest numbers, and zero pressure at the corner booth.</p>
       </div>
 
-      <div style="font-size:11px;font-weight:800;letter-spacing:0.1em;color:${palette.pill};text-transform:uppercase;margin-bottom:6px;">
-        Right Now · Your Live Status
-      </div>
-      <div style="background:${palette.bg};border-left:4px solid ${palette.border};border-radius:10px;padding:16px;margin-bottom:14px;">
-        <div style="font-size:18px;font-weight:800;line-height:1.3;color:#0f172a;margin-bottom:6px;">
-          ${escapeHtml(composed.headline)}
+      <div style="padding:20px 18px;box-sizing:border-box;">
+        <p style="margin:0 0 14px;font-size:16px;line-height:1.65;color:#1F1B18;">
+          Every fresh notebook starts before the first ink hits the page. Sometimes the nicest thing you can do for yourself is replace guesswork and side-eye with a warm lamp, a clean paper coaster, and a little daylight curiosity about what a week actually holds.
+        </p>
+
+        <p style="margin:0 0 16px;font-size:16px;line-height:1.65;color:#1F1B18;">
+          I&rsquo;m <strong>Sunny</strong> &mdash; your non-drinking booth-buddy here at Coaster (usually nursing a sparkling yuzu or a St. Agrestis Phony Negroni). I don&rsquo;t hand out gold stars, grades, or lectures. I just keep steady, friendly tally alongside you so your trends tell a clear story.
+        </p>
+
+        <div style="margin:16px 0;padding:16px 16px;border-radius:14px;background:#F5EFE6;border:1px solid #DED2C0;box-sizing:border-box;">
+          <div style="font-size:12px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#9A4E1A;">Quick Morning Note &mdash; How Did Last Night Go?</div>
+          <p style="margin:8px 0 0;font-size:16px;line-height:1.6;color:#1F1B18;">
+            No rush and no scoreboard &mdash; you can even start just by hitting reply to tell me <strong>how last night went</strong>, whether it was a quiet clear night, a glass of wine with dinner, or a round out with friends, and I&rsquo;ll tuck it gently onto yesterday&rsquo;s coaster.
+          </p>
         </div>
-        <div style="font-size:14px;line-height:1.55;color:#334155;">
-          ${escapeHtml(composed.body)}
+
+        <div style="margin:16px 0;padding:16px 16px;border-radius:14px;background:#FDF5EB;border:1px solid #E9C89B;box-sizing:border-box;">
+          <div style="font-size:12px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#9A4E1A;">How Standard Drink Units Work</div>
+          <p style="margin:8px 0 0;font-size:16px;line-height:1.6;color:#1F1B18;">
+            Because not all pours are built equal, Coaster measures in <strong>NIAAA Standard Drink Units</strong> (1.0u = 14g / 0.6 fl oz pure ethanol):
+          </p>
+          <ul style="margin:10px 0 0;padding-left:18px;font-size:15px;line-height:1.65;color:#4A3F35;">
+            <li><strong>1.0u</strong> = 12oz 5% beer &middot; 5oz 12% wine &middot; 1.5oz 40% spirit</li>
+            <li>A big <strong>16oz 6.8% hazy IPA</strong> tallboy automatically counts as <strong>1.8u</strong></li>
+            <li><strong>Zero-proof drinks &amp; Clear Days</strong> log cleanly at <strong>0.0u</strong></li>
+          </ul>
+        </div>
+
+        <div style="margin:16px 0;padding:16px 16px;border-radius:14px;background:#F2F7F4;border:1px solid #C8DED0;box-sizing:border-box;">
+          <div style="font-size:12px;font-weight:800;letter-spacing:0.06em;text-transform:uppercase;color:#2E6445;">Send Pics &amp; More &mdash; Zero Login Required</div>
+          <p style="margin:8px 0 0;font-size:16px;line-height:1.6;color:#1F1B18;">
+            This thread handles <strong>pics, plain English, and more</strong> whenever you feel like sharing:
+          </p>
+          <ul style="margin:10px 0 0;padding-left:18px;font-size:15px;line-height:1.65;color:#2D3F34;">
+            <li><strong>Pics &amp; photos:</strong> attach or snap a wine bottle or label, beer can/bottle ABV, cocktail menu, tap list, bar receipt, or a glass (even multi-photo gallery uploads with EXIF timestamps in the app)</li>
+            <li><strong>Plain-English email replies:</strong> <em>&ldquo;Glass of pinot noir last night&rdquo;</em>, <em>&ldquo;2 hazy IPAs at trivia&rdquo;</em>, or <em>&ldquo;Clear day&rdquo;</em></li>
+            <li><strong>And more:</strong> 1-tap pour buttons below, voice notes, fast shorthand (<em>2x 16oz 7%</em>), your phone&rsquo;s Share Sheet, and asking me for zero-proof swap ideas anytime</li>
+          </ul>
+          <p style="margin:10px 0 0;font-size:13px;line-height:1.5;color:#4A5D52;">
+            Check-in cadence: <strong>${escapeHtml(scheduleSummary)}</strong>
+          </p>
+        </div>
+
+        <div style="margin:20px 0 0;">
+          <div style="font-size:11px;font-weight:800;letter-spacing:0.07em;text-transform:uppercase;color:#6E6359;margin-bottom:8px;">1-Tap Quick Tally</div>
+          ${actionButtonsHtml}
+        </div>
+
+        <div style="margin:18px 0 0;">
+          <a href="${viewLedgerUrl}" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:12px 20px;border-radius:12px;background:#1F1B18;color:#FFFDF9;font-size:15px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;">Open Live Coaster &amp; Trends &rarr;</a>
         </div>
       </div>
 
-      <div style="font-size:13px;line-height:1.55;color:#0f172a;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;margin-bottom:14px;">
-        <strong>${escapeHtml(composed.lastFoodLine)}</strong><br/>
-        <span style="color:#334155;"><strong>What else did you have?</strong> Hit <strong>Reply</strong> in plain English (e.g. <em>&ldquo;3 eggs and sourdough toast&rdquo;</em>) — or <strong>attach a meal or nutrition-label photo</strong> — and I&apos;ll update your clock automatically.</span>
-      </div>
-
-      <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:14px;">
-        ${escapeHtml(composed.metricsLine)}
-      </div>
-
-      <div style="margin-bottom:16px;">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;margin-bottom:6px;">
-          Or 1-Tap Quick Update
-        </div>
-        ${actionButtonsHtml}
-      </div>
-
-      <div style="font-size:12px;color:#475569;line-height:1.55;border-top:1px solid #f1f5f9;padding-top:12px;">
-        <a href="${viewLedgerUrl}" style="color:#059669;font-weight:700;text-decoration:underline;">View Live Personal Ledger</a>
-        &nbsp;·&nbsp;
-        Optional visual dashboard &amp; wearables at <a href="${SITE_URL}" style="color:#2563eb;text-decoration:underline;">cfofitness.app</a>
-      </div>
-
-      <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;line-height:1.6;">
-        Share with a friend: <a href="${SITE_URL}/briefings" style="color:#2563eb;text-decoration:underline;">cfofitness.app/briefings</a><br/>
-        Always $0, zero guilt, easy to adjust or cancel:<br/>
-        <a href="${toggleCadenceUrl}" style="color:#64748b;text-decoration:underline;">${escapeHtml(toggleCadenceLabel)}</a>
-        &nbsp;·&nbsp;
-        <a href="${pause7dUrl}" style="color:#64748b;text-decoration:underline;">Pause 7 Days</a>
-        &nbsp;·&nbsp;
-        <a href="${unsubscribeUrl}" style="color:#dc2626;font-weight:700;text-decoration:underline;">1-Click Cancel</a>
+      <div style="padding:14px 18px;background:#FAF6F0;border-top:1px solid #E8DFD1;font-size:13px;color:#6E6359;line-height:1.8;display:flex;flex-wrap:wrap;gap:6px 12px;box-sizing:border-box;">
+        <a href="${viewLedgerUrl}" style="color:#9A4E1A;font-weight:700;text-decoration:underline;">Open Live Coaster &amp; Trends</a>
+        <a href="${toggleCadenceUrl}" style="color:#6E6359;text-decoration:underline;">${escapeHtml(toggleCadenceLabel)}</a>
+        <a href="${pauseUrl}" style="color:#6E6359;text-decoration:underline;">Pause Check-ins</a>
+        <a href="${unsubscribeUrl}" style="color:#6E6359;text-decoration:underline;">Unsubscribe</a>
       </div>
     </div>
   </body>
 </html>`;
 
   const text = [
-    cleanFirstName
-      ? `WELCOME ABOARD, ${cleanFirstName.toUpperCase()} — THE CFO DAILY BRIEFING ($0)`
-      : 'WELCOME TO THE CFO DAILY BRIEFING ($0)',
+    `A New Journey, ${displayGreeting}`,
+    `Pull up a seat with Sunny · Coaster`,
+    '',
+    'Every fresh notebook starts before the first ink hits the page. I am Sunny, your non-drinking booth-buddy here at Coaster (usually nursing a sparkling yuzu or a Phony Negroni). Zero gold stars, zero grades, zero lectures — just honest numbers and relaxed trendlines.',
+    '',
+    'HOW DID LAST NIGHT GO?',
+    "You can even start just by hitting reply to tell me how last night went — whether it was a quiet clear night, a glass of wine with dinner, or a round out with friends — and I'll tuck it gently onto yesterday's coaster.",
+    '',
+    'HOW STANDARD DRINK UNITS WORK:',
+    '- 1.0u = 12oz 5% beer / 5oz 12% wine / 1.5oz 40% spirit',
+    '- A 16oz 6.8% hazy IPA counts as 1.8u',
+    '- Zero-proof swaps and Clear Days log cleanly at 0.0u',
+    '',
+    'IT HANDLES PICS & MORE:',
+    '- Pics & photos: attach a wine bottle or label, beer can/bottle ABV, cocktail menu, tap list, bar receipt, or a glass (plus multi-photo EXIF gallery in the app)',
+    '- Plain English: "Glass of pinot noir last night", "2 hazy IPAs at trivia", or "Clear day"',
+    '- And more: 1-tap email buttons below, voice notes, fast shorthand (2x 16oz 7%), your phone Share Sheet, and zero-proof swap ideas anytime',
     `Schedule: ${scheduleSummary}`,
     '',
-    'How it works in 10 seconds:',
-    '1. Just hit Reply in plain English whenever you eat (or attach a meal/label photo).',
-    '2. Ask or adjust anytime ("remove the toast", "ping me at 8am", "morning only").',
-    `3. View your live personal ledger (no login required): ${viewLedgerUrl}`,
-    '',
-    '--- RIGHT NOW: YOUR LIVE STATUS ---',
-    composed.headline,
-    composed.body,
-    '',
-    composed.lastFoodLine,
-    'What have you had so far today? Hit Reply in plain English — or attach a meal or nutrition-label photo — and I will update your clock automatically.',
-    '',
-    composed.metricsLine,
-    '',
-    'Quick Actions:',
+    '1-Tap Quick Tally:',
     ...composed.quickActions.map(
-      (btn) => `- ${btn.label}: ${buildOutreachActionUrl({ uid, action: btn.action, date: composed.localDate, window: composed.window })}`,
+      (btn) =>
+        `- ${btn.label}: ${buildOutreachActionUrl({
+          uid,
+          action: btn.action,
+          date: composed.localDate,
+          window: composed.window,
+        })}`,
     ),
     '',
-    `View Live Personal Ledger: ${viewLedgerUrl}`,
-    `Optional dashboard & wearables (Google Health, Oura, Withings): ${SITE_URL}`,
-    `Share with a friend: ${SITE_URL}/briefings`,
-    `${toggleCadenceLabel}: ${toggleCadenceUrl}`,
-    `Pause 7 Days: ${pause7dUrl}`,
-    `1-Click Cancel (Instant): ${unsubscribeUrl}`,
+    `Open Live Coaster & Trends: ${viewLedgerUrl}`,
+    `Pause check-ins: ${pauseUrl}`,
+    `Unsubscribe: ${unsubscribeUrl}`,
   ].join('\n');
 
   return { subject, html, text, unsubscribeUrl };
@@ -578,7 +648,7 @@ export async function sendOutreachWelcomeEmail(params: {
   nightHour?: number;
   composed: ComposedOutreachMessage;
   recipientFirstName?: string;
-}): Promise<{ success: boolean; error?: string }> {
+}): Promise<{ success: boolean; provider?: 'gmail' | 'resend'; error?: string }> {
   const { subject, html, text, unsubscribeUrl } = renderOutreachWelcomeEmailHtml(params);
 
   return deliverRawOutreachEmail({

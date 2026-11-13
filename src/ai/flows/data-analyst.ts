@@ -42,12 +42,12 @@ const calculateStatsTool = ai.defineTool(
 const fetchHistoricalDataTool = ai.defineTool(
   {
     name: 'fetch_historical_data',
-    description: 'Fetches the user\'s exercise, food, or fasting logs over a specified number of days. It returns the raw entries with their dates so you can filter by day of the week, exercise type, etc.',
+    description: 'Fetches the user\'s drink/pour ledger (`food`), activity, or legacy logs over a specified number of days (up to 180) so you can inspect NIAAA Standard Drink Units, clear days, zero-proof swaps, categories, and day-of-week patterns.',
     inputSchema: z.object({
       userId: z.string(),
       localDate: z.string().describe('The current local date YYYY-MM-DD from the client, used as the anchor for "today"'),
       type: z.enum(['food', 'exercise', 'fasting']),
-      daysBack: z.number().describe('Number of days to look back. e.g. 30 for a month, 90 for a quarter. Max 180.'),
+      daysBack: z.number().describe('Number of days to look back. e.g. 7 for a week, 30 for a month, 90 for a quarter. Max 180.'),
     }),
     outputSchema: z.any(),
   },
@@ -96,13 +96,14 @@ export const dataAnalystFlow = ai.defineFlow(
   async (input) => {
     let result;
     const generateConfig = {
-      system: `You are the "Data Analyst" agent for a fitness/health app.
-Your job is to answer complex analytical questions from the user about their fitness data (e.g., comparing days of the week, analyzing variances in calorie burn, spotting long-term trends).
-You have tools to fetch their historical data (up to 180 days) and to calculate statistics (mean, variance, standard deviation).
-1. ALWAYS use the fetch_historical_data tool to get the data you need. 
-2. Identify the relevant data points (e.g. filter by day of week or exercise name).
-3. Use the calculate_statistics tool to do the math to ensure accuracy. DO NOT do complex math in your head.
-4. Provide a highly analytical, insightful, and data-driven summary of your findings. Give the user the hard numbers (averages, standard deviations, etc.) in a friendly, "quant" tone.`,
+      system: `You are Coaster's Trend & Data Analyst helper, supporting Sunny · Coaster.
+Your job is to answer analytical questions about the user's beverage tally, NIAAA Standard Drink Units (\`standardUnits\` or \`alcoholDrinks\`, where 1.0u = 14g / 0.6 fl oz pure ethanol), Clear Days (\`isClearDay\`), zero-proof swaps (\`isZeroProof\`), drink categories (\`beer\`, \`ipa\`, \`wine\`, \`cocktail\`, \`spirit\`, \`seltzer\`), day-of-week rhythms (e.g. Friday vs weekday), and multi-month trends.
+
+RULES:
+1. ALWAYS use the \`fetch_historical_data\` tool with \`type: "food"\` to retrieve their actual \`food_log\` pour history (do not guess numbers). Note that ignored entries are already filtered out, while entries with \`isClearDay: true\` or \`isZeroProof: true\` count as 0.0 standard units.
+2. When summing per day or comparing days without an entry: count days with \`isClearDay: true\`, explicit \`0.0u\`, or zero-unit days between their first tracked log and yesterday clearly and accurately.
+3. Use \`calculate_statistics\` to compute exact totals, daily means, variance, standard deviation, min, and max — never do multi-day stats in your head.
+4. Keep your tone warm, observant, and completely non-judgmental — never scold, lecture, score morally, or make drunk jokes.`,
       prompt: input.query,
       tools: [fetchHistoricalDataTool, calculateStatsTool],
       config: {

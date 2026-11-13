@@ -1,12 +1,27 @@
 /**
  * @fileOverview Stateless HMAC token signing + IANA timezone helpers for
- * 3x/day automated Email & Discord outreach.
+ * Coaster automated Email & Discord check-ins and Zero-Login Live Coaster links.
  */
 
 import crypto from 'crypto';
-import type { OutreachWindow } from './health-service';
+import type { OutreachCadence, OutreachWindow } from './health-service';
 
 export type OutreachActionType =
+  | 'log_beer'
+  | 'log_ipa'
+  | 'log_wine'
+  | 'log_spirit'
+  | 'log_cocktail'
+  | 'log_seltzer'
+  | 'log_zero_proof'
+  | 'log_clear_day'
+  | 'undo'
+  | 'undo_food'
+  | 'view_ledger'
+  | 'pause'
+  | 'resume'
+  | 'set_cadence'
+  | 'confirm_pending'
   | 'unsubscribe'
   | 'pause_7d'
   | 'morning_only'
@@ -17,19 +32,21 @@ export type OutreachActionType =
   | 'same_breakfast'
   | 'dinner_standard'
   | 'still_fasting'
-  | 'kitchen_closed'
-  | 'undo_food'
-  | 'view_ledger';
+  | 'kitchen_closed';
 
 export interface OutreachTokenPayload {
   uid: string;
   action: OutreachActionType;
-  /** Target local YYYY-MM-DD for meal presets / idempotency. */
+  /** Target local YYYY-MM-DD for pour presets / idempotency. */
   date?: string;
   /** Dispatch window that minted this quick-action link. */
   window?: OutreachWindow;
-  /** Specific food_log doc ID when action === 'undo_food'. */
+  /** Specific food_log doc ID when action === 'undo' | 'undo_food' | 'confirm_pending'. */
   foodId?: string;
+  /** Optional target cadence when action === 'set_cadence'. */
+  cadence?: OutreachCadence;
+  /** Optional per-click nonce for live Coaster repeat-pour buttons. */
+  nonce?: string;
   /** Expiration Unix epoch seconds. */
   exp: number;
 }
@@ -39,7 +56,7 @@ function getSigningSecret(): string {
     process.env.OUTREACH_TOKEN_SECRET ||
     process.env.CRON_SECRET ||
     process.env.NEXT_PUBLIC_FIREBASE_APP_ID ||
-    'cfo-fitness-outreach-dev-secret';
+    'coaster-outreach-dev-secret';
   return secret;
 }
 
@@ -59,14 +76,18 @@ function base64UrlDecode(input: string): string {
 
 /**
  * Signs an outreach action payload with HMAC-SHA256.
- * Control actions (unsubscribe, pause, cadence) default to 365-day validity so old
- * emails always honor 1-click cancel; meal quick-log actions default to 7 days.
+ * Control actions (unsubscribe, pause, resume, set_cadence, view_ledger) default
+ * to 365-day validity so old emails always honor 1-click links; pour quick-log
+ * actions default to 7 days.
  */
 export function signOutreachToken(
   payload: Omit<OutreachTokenPayload, 'exp'> & { exp?: number; ttlSeconds?: number },
 ): string {
   const isControlAction =
     payload.action === 'unsubscribe' ||
+    payload.action === 'pause' ||
+    payload.action === 'resume' ||
+    payload.action === 'set_cadence' ||
     payload.action === 'pause_7d' ||
     payload.action === 'morning_only' ||
     payload.action === 'resume_3x' ||
@@ -81,6 +102,8 @@ export function signOutreachToken(
     ...(payload.date ? { date: payload.date } : {}),
     ...(payload.window ? { window: payload.window } : {}),
     ...(payload.foodId ? { foodId: payload.foodId } : {}),
+    ...(payload.cadence ? { cadence: payload.cadence } : {}),
+    ...(payload.nonce ? { nonce: payload.nonce } : {}),
     exp,
   };
 

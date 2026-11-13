@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     if (!entitlement.allowed) {
       return NextResponse.json(
         {
-          error: `Voice dictation requires an active CFO Retainer after your ${entitlement.freeLimit} complimentary AI audits.`,
+          error: `Voice dictation requires an active Coaster membership after your ${entitlement.freeLimit} complimentary voice notes.`,
           code: 'PAYWALL_LIMIT_REACHED',
           entitlement,
         },
@@ -44,14 +44,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Audio too large (max ~5 MB)' }, { status: 413 });
     }
 
-    // Use CFO_LITE_MODEL (gemini-3.1-flash-lite) for pure speech-to-text (cuts transcription cost by 72%)
+    // Use CFO_LITE_MODEL (gemini-3.1-flash-lite) for fast speech-to-text tuned for beverage & pour terms
     const { text } = await ai.generate({
       model: CFO_LITE_MODEL,
       config: { safetySettings: SAFETY_SETTINGS },
       use: [trackAiUsage({ uid, feature: 'transcribe', model: CFO_LITE_MODEL, tier: entitlement.tier })],
       prompt: [
         { media: { url: audioDataUri } },
-        { text: 'Transcribe the audio exactly as spoken. Return only the transcription text, nothing else.' },
+        {
+          text: 'Transcribe the audio accurately as spoken (domain terms may include beer, IPA, wine varietals, spirits, cocktails, oz/mL pours, ABV percentages, zero-proof drinks, or "clear day"). Return only the transcription text, nothing else.',
+        },
       ],
     });
 

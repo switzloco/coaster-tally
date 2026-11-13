@@ -17,10 +17,26 @@ function currentWindowForHour(hour: number): OutreachWindow {
   return 'night';
 }
 
+const HONORIFIC_PREFIXES = new Set(['miss', 'mr', 'mrs', 'ms', 'mx', 'dr']);
+
+function deriveFirstNameFromEmail(email?: string): string | undefined {
+  if (!email) return undefined;
+  const local = email.split('@')[0]?.replace(/\+.*$/, '') ?? '';
+  const tokens = local
+    .split(/[._-]+/)
+    .map((t) => t.replace(/[^a-zA-Z]/g, '').trim())
+    .filter(Boolean);
+  const chosen = tokens.find((t) => !HONORIFIC_PREFIXES.has(t.toLowerCase())) ?? tokens[0];
+  if (!chosen) return undefined;
+  return chosen.charAt(0).toUpperCase() + chosen.slice(1).toLowerCase();
+}
+
 export async function enrollPublicOutreachAction(data: {
   channel: OutreachChannel;
   email?: string;
   discordUserId?: string;
+  firstName?: string;
+  displayName?: string;
   weightLbs?: number;
   cadence?: OutreachCadence;
   timezone?: string;
@@ -87,35 +103,35 @@ export async function enrollPublicOutreachAction(data: {
       await adminHealthService.getHealthSummary(db, uid);
     }
 
-    const weightLbs = Number(data.weightLbs || 0);
-    const weightKg = weightLbs >= 80 && weightLbs <= 500 ? weightLbs / 2.20462 : undefined;
-    const proteinGoal =
-      weightLbs >= 80 && weightLbs <= 500
-        ? Math.min(240, Math.max(110, Math.round(weightLbs * 0.85)))
-        : undefined;
     const timezone = normalizeTimezone(data.timezone);
+    const derivedFirstName =
+      data.firstName?.trim() ||
+      data.displayName?.trim().split(/\s+/)[0] ||
+      deriveFirstNameFromEmail(email);
+    const cadence: OutreachCadence = data.cadence ?? '2x';
 
     await saveUserOutreachSettings({
       uid,
+      displayName: data.displayName?.trim() || derivedFirstName,
       outreach: {
-        enabled: true,
+        enabled: cadence !== 'pause',
         channel,
-        cadence: data.cadence ?? '3x',
+        cadence,
         email: email || undefined,
         discordUserId: discordUserId || undefined,
         timezone,
-        ...(data.morningHour != null
-          ? { morningHour: Math.max(4, Math.min(11, Math.round(data.morningHour))) }
-          : {}),
+        morningHour:
+          data.morningHour != null
+            ? Math.max(4, Math.min(11, Math.round(data.morningHour)))
+            : 9,
         ...(data.middayHour != null
           ? { middayHour: Math.max(11, Math.min(16, Math.round(data.middayHour))) }
           : {}),
-        ...(data.nightHour != null
-          ? { nightHour: Math.max(17, Math.min(22, Math.round(data.nightHour))) }
-          : {}),
+        nightHour:
+          data.nightHour != null
+            ? Math.max(16, Math.min(22, Math.round(data.nightHour)))
+            : 19,
       },
-      weightKg,
-      proteinGoal,
     });
 
     const clock = resolveLocalClock(new Date(), timezone);
@@ -125,6 +141,7 @@ export async function enrollPublicOutreachAction(data: {
       window: windowNow,
       force: true,
       isWelcome: true,
+      recipientFirstName: derivedFirstName,
     });
 
     const composed =
@@ -140,7 +157,7 @@ export async function enrollPublicOutreachAction(data: {
     console.error('[enrollPublicOutreachAction] Error:', err);
     return {
       success: false,
-      error: err?.message || 'Could not activate briefings right now.',
+      error: err?.message || 'Could not activate Coaster check-ins right now.',
     };
   }
 }

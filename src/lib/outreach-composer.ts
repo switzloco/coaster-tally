@@ -1,35 +1,30 @@
 /**
- * @fileOverview Zero-AI Outreach Composer (0 LLM tokens).
+ * @fileOverview Zero-AI deterministic composer for Sunny · Coaster Morning/Evening
+ * check-ins (Email & Discord).
  *
- * Wraps `computeEatRunway()` (Alpert & Hepatic Timing Engine) and `calculateDailyVFScore()`
- * to generate Morning, Midday, and Night dispatches for Email & Discord.
- * Every dispatch leads with a concrete "Eat by XYZ" clock or "You're good from yesterday /
- * through 8:00 AM tomorrow" reassurance.
+ * Strictly zero judgment, zero scoring, zero lectures. Uses NIAAA Standard Drink
+ * Units (`1.0u = 14g ethanol = 0.6 fl oz pure ethanol`) and surface-ready 1-tap buttons.
  */
 
 import {
-  computeEatRunway,
-  computeBurnBetweenHours,
-  type EatRunway,
-  type RecentDaySummary,
-} from './alpert-pace';
-import { calculateDailyVFScore, computeAlpertNumber, type DailyVFResult } from './vf-scoring';
-import {
-  estimateBmrKcal,
-  ACTIVITY_CREDIT_FRACTION,
-  runMetabolicSimulation,
-  computeMuscleGlycogenMaxKcal,
-} from './metabolic-engine';
-import type {
-  HealthData,
-  UserPreferences,
-  OutreachWindow,
+  computeTrendSummary,
+  formatUnits,
+  getEntryDateKey,
+  getEntryUnits,
+  isClearDayEntry,
+  isZeroProofEntry,
+  pickZeroProofAlternative,
+  shouldSuggestAlternative,
+  type CoasterFoodLogEntry,
+  type DrinkCategory,
+  type DrinkTrendSummary,
+  type OutreachCadence,
+  type OutreachWindow,
 } from './health-service';
-import type { FoodLogEntry, ExerciseLogEntry } from './food-exercise-types';
 import { addIsoDays, diffIsoDays, type OutreachActionType } from './outreach-auth';
 
-export const SILENT_DAYS_TO_MORNING_ONLY = 5;
-export const SILENT_DAYS_TO_AUTO_PAUSE = 10;
+export const SILENT_DAYS_TO_MORNING_ONLY = 3;
+export const SILENT_DAYS_TO_AUTO_PAUSE = 7;
 
 export interface QuickActionButton {
   action: OutreachActionType;
@@ -46,422 +41,395 @@ export interface ComposedOutreachMessage {
   body: string;
   lastFoodLine: string;
   metricsLine: string;
-  eatByLabel: string;
-  goodFromYesterday: boolean;
-  safeThroughTomorrowMorning: boolean;
   quickActions: QuickActionButton[];
   autoSunsetBanner?: string;
-  runway: EatRunway;
-  vfPreview: DailyVFResult;
+  // Coaster summary telemetry
+  todayUnits: number;
+  yesterdayUnits: number;
+  sevenDayTotal: number;
+  sevenDayAvg: number;
+  thirtyDayTotal: number;
+  clearDaysLast30: number;
+  zeroProofLast30: number;
+  swapSuggestion?: string;
+  // Backward-compatible optional fields retained for shared Discord adapters
+  eatByLabel?: string;
+  goodFromYesterday?: boolean;
+  safeThroughTomorrowMorning?: boolean;
+  runway?: Record<string, unknown>;
+  vfPreview?: Record<string, unknown>;
+}
+
+export interface LastLoggedSummaryItem {
+  id?: string;
+  name?: string;
+  foodName?: string;
+  date?: string;
+  consumedAt?: string;
+  standardUnits?: number;
+  alcoholDrinks?: number;
+  drinkCategory?: DrinkCategory;
+  isClearDay?: boolean;
+  isZeroProof?: boolean;
+  calories?: number;
+  proteinG?: number;
 }
 
 export interface ComposeOutreachInput {
   window: OutreachWindow;
   localDate: string;
-  hoursElapsed: number;
-  health?: HealthData | null;
-  prefs?: UserPreferences | null;
-  todayFoods?: FoodLogEntry[];
-  yesterdayFoods?: FoodLogEntry[];
-  todayExercises?: ExerciseLogEntry[];
-  autoSunsetNotice?: 'downshifted_to_morning' | null;
+  localTime?: string;
+  hoursElapsed?: number;
+  displayName?: string | null;
+  cadence?: OutreachCadence;
+  recentLogs?: CoasterFoodLogEntry[];
+  todayFoods?: CoasterFoodLogEntry[];
+  yesterdayFoods?: CoasterFoodLogEntry[];
+  todayFoodsCount?: number;
+  lastFoodToday?: LastLoggedSummaryItem | null;
+  lastFoodYesterday?: LastLoggedSummaryItem | null;
+  lastInboundDate?: string | null;
+  lastFoodDate?: string | null;
+  // Legacy optional properties retained for backward compat
+  health?: Record<string, unknown>;
+  prefs?: Record<string, unknown>;
+  goals?: Record<string, unknown>;
+  yesterdaySummary?: Record<string, unknown>;
+  todaySummary?: Record<string, unknown>;
+  runway?: Record<string, unknown>;
+  vfPreview?: Record<string, unknown>;
+  todayProteinG?: number;
+  todayPlantG?: number;
 }
 
-function cleanClockLabel(label: string): string {
-  return label.replace(/^Today\s+/i, '').trim();
-}
+export function buildLastFoodOnRecordLine(params: {
+  localDate: string;
+  todayFoodsCount?: number;
+  lastFoodToday?: LastLoggedSummaryItem | null;
+  lastFoodYesterday?: LastLoggedSummaryItem | null;
+}): string {
+  const describeItem = (item: LastLoggedSummaryItem): string => {
+    const label = item.name || item.foodName || 'Pour';
+    const rawTime = item.consumedAt || '';
+    const timeShort = /^\d{4}-\d{2}-\d{2}T/.test(rawTime) ? rawTime.slice(11, 16) : rawTime.slice(0, 5);
+    const timePart = timeShort ? ` at ${timeShort}` : '';
+    if (isClearDayEntry(item)) {
+      return `Clear Day (0.0u)${timePart}`;
+    }
+    if (isZeroProofEntry(item)) {
+      return `${label} (0.0u zero-proof)${timePart}`;
+    }
+    const units = getEntryUnits(item);
+    return `${label} (${formatUnits(units)})${timePart}`;
+  };
 
-function format12hClock(hhmm?: string): string | null {
-  if (!hhmm || !/^\d{1,2}:\d{2}/.test(hhmm)) return null;
-  const [hRaw, mRaw] = hhmm.split(':');
-  const h = Number(hRaw);
-  const m = Number(mRaw);
-  if (Number.isNaN(h) || Number.isNaN(m)) return null;
-  const suffix = h >= 12 ? 'PM' : 'AM';
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  return `${hour12}:${String(m).padStart(2, '0')} ${suffix}`;
-}
-
-export function buildLastFoodOnRecordLine(
-  todayFoods: FoodLogEntry[] = [],
-  yesterdayFoods: FoodLogEntry[] = [],
-): string {
-  const activeToday = todayFoods
-    .filter((f) => !f.ignored && f.name)
-    .sort((a, b) => (b.consumedAt || '').localeCompare(a.consumedAt || ''));
-
-  if (activeToday.length > 0) {
-    const latest = activeToday[0];
-    const atLabel = format12hClock(latest.consumedAt);
-    const timePart = atLabel ? ` today at ${atLabel}` : ' today';
-    return `Last on record: ${latest.name}${timePart} (${Math.round(latest.calories || 0)} kcal, ${Math.round(latest.proteinG || 0)}g protein).`;
+  if (params.lastFoodToday) {
+    const countLabel =
+      typeof params.todayFoodsCount === 'number' && params.todayFoodsCount > 1
+        ? ` (${params.todayFoodsCount} entries today)`
+        : '';
+    return `Last on your coaster today: ${describeItem(params.lastFoodToday)}${countLabel}.`;
   }
-
-  const activeYesterday = yesterdayFoods
-    .filter((f) => !f.ignored && f.name)
-    .sort((a, b) => (b.consumedAt || '').localeCompare(a.consumedAt || ''));
-
-  if (activeYesterday.length > 0) {
-    const latest = activeYesterday[0];
-    const atLabel = format12hClock(latest.consumedAt);
-    const timePart = atLabel ? ` yesterday at ${atLabel}` : ' yesterday';
-    return `Last on record: ${latest.name}${timePart} (${Math.round(latest.calories || 0)} kcal, ${Math.round(latest.proteinG || 0)}g protein) — nothing logged yet today.`;
+  if (params.lastFoodYesterday) {
+    return `Nothing logged yet today · Last on your coaster yesterday: ${describeItem(params.lastFoodYesterday)}.`;
   }
-
-  return 'Last on record: Nothing logged yet today.';
+  return 'Nothing on your coaster yet today — tap a pour below or reply whenever you like.';
 }
 
-/**
- * Evaluates quiet-user auto-sunset policy to protect email domain reputation and quota.
- */
+export function isWindowAllowedForCadence(params: {
+  cadence: OutreachCadence;
+  window: OutreachWindow;
+  localDate: string;
+}): boolean {
+  if (params.cadence === 'pause') return false;
+  if (params.cadence === '2x') {
+    return params.window === 'morning' || params.window === 'night';
+  }
+  if (params.cadence === 'daily' || params.cadence === 'morning_only') {
+    return params.window === 'morning';
+  }
+  if (params.cadence === 'weekly') {
+    if (params.window !== 'morning') return false;
+    const [y, m, d] = params.localDate.split('-').map((n) => Number(n));
+    if (!y || !m || !d) return true;
+    const dayOfWeek = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+    return dayOfWeek === 0; // Sundays
+  }
+  // '3x' legacy cadence
+  return true;
+}
+
 export function evaluateAutoSunset(params: {
   localDate: string;
-  lastInteractionDate?: string;
-  currentCadence: '3x' | 'morning_only';
-}): { decision: 'active' | 'downshift_to_morning' | 'auto_pause'; silentDays: number } {
-  const { localDate, lastInteractionDate, currentCadence } = params;
-  if (!lastInteractionDate) {
-    return { decision: 'active', silentDays: 0 };
+  cadence?: OutreachCadence;
+  currentCadence?: OutreachCadence;
+  lastInboundDate?: string | null;
+  lastFoodDate?: string | null;
+  lastInteractionDate?: string | null;
+}): {
+  silentDays: number;
+  nextCadence?: OutreachCadence;
+  shouldAutoPause: boolean;
+  decision: 'none' | 'downshift_to_morning' | 'auto_pause';
+  banner?: string;
+} {
+  const cadence = params.cadence ?? params.currentCadence ?? '2x';
+  const latestActivity = [
+    params.lastInboundDate,
+    params.lastFoodDate,
+    params.lastInteractionDate,
+  ]
+    .filter((d): d is string => Boolean(d && /^\d{4}-\d{2}-\d{2}$/.test(d)))
+    .sort()
+    .pop();
+
+  if (!latestActivity) {
+    return { silentDays: 0, shouldAutoPause: false, decision: 'none' };
   }
-  const silentDays = Math.max(0, diffIsoDays(lastInteractionDate, localDate));
-  if (silentDays >= SILENT_DAYS_TO_AUTO_PAUSE) {
-    return { decision: 'auto_pause', silentDays };
+
+  const silentDays = Math.max(0, diffIsoDays(latestActivity, params.localDate));
+
+  if (silentDays >= SILENT_DAYS_TO_AUTO_PAUSE && cadence !== 'pause') {
+    return {
+      silentDays,
+      nextCadence: 'pause',
+      shouldAutoPause: true,
+      decision: 'auto_pause',
+      banner:
+        'Check-ins will pause after this note since it has been a quiet week — tap Resume anytime you want Sunny back at the booth.',
+    };
   }
-  if (silentDays >= SILENT_DAYS_TO_MORNING_ONLY && currentCadence === '3x') {
-    return { decision: 'downshift_to_morning', silentDays };
+
+  if (
+    silentDays >= SILENT_DAYS_TO_MORNING_ONLY &&
+    (cadence === '2x' || cadence === '3x')
+  ) {
+    return {
+      silentDays,
+      nextCadence: 'daily',
+      shouldAutoPause: false,
+      decision: 'downshift_to_morning',
+      banner:
+        'Quiet stretch noticed — shifting gently to 1x daily morning check-ins so your inbox stays breezy.',
+    };
   }
-  return { decision: 'active', silentDays };
+
+  return { silentDays, shouldAutoPause: false, decision: 'none' };
 }
 
-/**
- * Computes live intraday burn, Alpert Eat Runway, and VF Score preview without any LLM calls.
- */
-export function buildOutreachRunwayContext(input: ComposeOutreachInput): {
-  runway: EatRunway;
-  vfPreview: DailyVFResult;
-  todayCaloriesIn: number;
-  todayProteinG: number;
-  proteinGoal: number;
-  yesterdaySurplusKcal: number;
-  hasYesterdayBreakfast: boolean;
+export function buildOutreachRunwayContext(params: {
+  localDate: string;
+  recentLogs?: CoasterFoodLogEntry[];
+}): {
+  trend: DrinkTrendSummary;
+  yesterdayUnits: number;
+  yesterdayClearDay: boolean;
 } {
-  const {
-    localDate,
-    hoursElapsed,
-    health,
-    prefs,
-    todayFoods = [],
-    yesterdayFoods = [],
-    todayExercises = [],
-  } = input;
-
-  const weightKg = health?.weightKg ?? prefs?.profile?.weightKg ?? 77;
-  const heightCm = health?.heightCm ?? prefs?.profile?.heightCm ?? 178;
-  const bodyFatPct = health?.bodyFatPct ?? 22;
-  const age = prefs?.profile?.age ?? 35;
-  const hasCreatine = Boolean(prefs?.profile?.hasCreatine);
-  const proteinGoal = prefs?.targets?.proteinGoal ?? 150;
-
-  const bmrKcal = estimateBmrKcal(weightKg, heightCm, age);
-  const alpertNumber = computeAlpertNumber(weightKg, bodyFatPct);
-
-  const activeTodayFoods = todayFoods.filter((f) => !f.ignored);
-  const activeYesterdayFoods = yesterdayFoods.filter((f) => !f.ignored);
-  const activeTodayExercises = todayExercises.filter((e) => !e.ignored);
-
-  const todayCaloriesIn = activeTodayFoods.reduce((s, f) => s + (f.calories || 0), 0);
-  const todayProteinG = Math.round(activeTodayFoods.reduce((s, f) => s + (f.proteinG || 0), 0));
-  const todayDrinks = activeTodayFoods.reduce((s, f) => s + (f.alcoholDrinks || 0), 0);
-  const todaySeedOilMeals = activeTodayFoods.filter((f) => f.hasSeedOils).length;
-
-  // Circadian elapsed BMR + waking burn up to `hoursElapsed`
-  const clampedHours = Math.max(0.5, Math.min(24, hoursElapsed));
-  const sleepHourly = bmrKcal / 24;
-  const wakingBaselineHourly = sleepHourly * 1.28;
-  const estimatedElapsedBurn = Math.round(
-    computeBurnBetweenHours(0, clampedHours, wakingBaselineHourly, sleepHourly),
+  const logs = params.recentLogs ?? [];
+  const trend = computeTrendSummary(logs, params.localDate);
+  const yesterdayIso = addIsoDays(params.localDate, -1);
+  const yesterdayLogs = logs.filter(
+    (e) => !e.ignored && getEntryDateKey(e) === yesterdayIso,
   );
-  const loggedExerciseBurn = activeTodayExercises.reduce(
-    (s, e) => s + (e.adjustedCalories ?? (e.estimatedCaloriesBurned || 0) * ACTIVITY_CREDIT_FRACTION),
-    0,
-  );
-
-  // Check if a device snapshot exists for localDate
-  const todaySnap = health?.fitbitByDate?.[localDate];
-  let elapsedScoredOut = Math.round(estimatedElapsedBurn + loggedExerciseBurn);
-  if (todaySnap?.caloriesOut && todaySnap.caloriesOut > 0) {
-    const elapsedBmr = (bmrKcal * clampedHours) / 24;
-    // Guard against full-day projected caloriesOut being reported early in the morning
-    const maxPlausibleElapsed = elapsedBmr * 2.6 + 600;
-    const rawDevice = Math.min(todaySnap.caloriesOut, maxPlausibleElapsed);
-    elapsedScoredOut = Math.round(
-      elapsedBmr + Math.max(0, rawDevice - elapsedBmr) * ACTIVITY_CREDIT_FRACTION,
-    );
-  }
-
-  // Extract recent completed days (up to 3) & yesterday's deficit/surplus
-  const yesterdayIso = addIsoDays(localDate, -1);
-  const recentHistory = (health?.history ?? [])
-    .filter((h) => h.isoDate && h.isoDate < localDate && h.breakdown)
-    .sort((a, b) => (b.isoDate || '').localeCompare(a.isoDate || ''))
-    .slice(0, 3);
-
-  const recentDays: RecentDaySummary[] = recentHistory.map((h) => ({
-    isoDate: h.isoDate,
-    caloriesIn: h.breakdown?.caloriesIn ?? 0,
-    scoredCaloriesOut: h.breakdown?.scoredCaloriesOut ?? h.breakdown?.caloriesOut ?? bmrKcal,
-    deficit: h.breakdown?.deficit,
-    proteinG: h.breakdown?.proteinG,
-    alcoholDrinks: h.breakdown?.alcoholDrinks,
-    vfScore: h.gain,
-  }));
-
-  let prevDayDeficitKcal = 0;
-  let yesterdaySurplusKcal = 0;
-
-  const yesterdayHistory = recentHistory.find((h) => h.isoDate === yesterdayIso);
-  if (yesterdayHistory?.breakdown) {
-    const yIn = yesterdayHistory.breakdown.caloriesIn ?? 0;
-    const yOut =
-      yesterdayHistory.breakdown.scoredCaloriesOut ??
-      yesterdayHistory.breakdown.caloriesOut ??
-      Math.round(bmrKcal * 1.2);
-    const diff = yOut - yIn;
-    if (diff > 0) {
-      prevDayDeficitKcal = diff;
-    } else {
-      yesterdaySurplusKcal = Math.abs(diff);
-    }
-  } else if (activeYesterdayFoods.length > 0) {
-    const yIn = activeYesterdayFoods.reduce((s, f) => s + (f.calories || 0), 0);
-    const ySnapOut = health?.fitbitByDate?.[yesterdayIso]?.caloriesOut;
-    const yOut = ySnapOut && ySnapOut > 0
-      ? Math.round(bmrKcal + Math.max(0, ySnapOut - bmrKcal) * ACTIVITY_CREDIT_FRACTION)
-      : Math.round(bmrKcal * 1.2);
-    const diff = yOut - yIn;
-    if (diff > 0) {
-      prevDayDeficitKcal = diff;
-    } else {
-      yesterdaySurplusKcal = Math.abs(diff);
-    }
-  }
-
-  // Full-day projected burn for simulation & VF preview
-  const remainingBurn = computeBurnBetweenHours(clampedHours, 24, wakingBaselineHourly, sleepHourly);
-  const fullDayRawCaloriesOut = Math.max(bmrKcal, Math.round(elapsedScoredOut + remainingBurn));
-
-  const sim = runMetabolicSimulation({
-    caloriesOut: fullDayRawCaloriesOut,
-    exerciseCreditFraction: ACTIVITY_CREDIT_FRACTION,
-    alpertNumber,
-    foodLogs: activeTodayFoods,
-    exerciseLogs: activeTodayExercises,
-    fitbitActivities: todaySnap?.activities,
-    caloriesIn: todayCaloriesIn,
-    hrv: todaySnap?.hrv ?? health?.hrv,
-    hasCreatine,
-    weightKg,
-    bodyFatPct,
-    heightCm,
-    age,
-    muscleGlycogenMaxKcal: computeMuscleGlycogenMaxKcal(weightKg, bodyFatPct, hasCreatine),
-  });
-
-  const runway = computeEatRunway({
-    caloriesIn: todayCaloriesIn,
-    scoredCaloriesOut: elapsedScoredOut,
-    alpertNumber,
-    hoursElapsed: clampedHours,
-    proteinG: todayProteinG,
-    proteinGoal,
-    bmrKcal,
-    prevDayDeficitKcal,
-    slots: sim.slots,
-    foodLogs: activeTodayFoods,
-    recentDays,
-  });
-
-  // Back-solve equivalent raw device caloriesOut so calculateDailyVFScore's creditedCaloriesOut matches fullDayRawCaloriesOut
-  const equivalentRawDeviceOut = bmrKcal + Math.max(0, fullDayRawCaloriesOut - bmrKcal) / ACTIVITY_CREDIT_FRACTION;
-  const vfPreview = calculateDailyVFScore({
-    caloriesIn: todayCaloriesIn,
-    caloriesOut: Math.round(equivalentRawDeviceOut),
-    proteinG: todayProteinG,
-    proteinGoal,
-    fastingHours: 0,
-    alcoholDrinks: todayDrinks,
-    sleepHours: todaySnap?.sleepHours ?? health?.sleepHours ?? 7.5,
-    seedOilMeals: todaySeedOilMeals,
-    weightKg,
-    bodyFatPct,
-    heightCm,
-    age,
-    hrv: todaySnap?.hrv ?? health?.hrv,
-    hasCreatine,
-    foodLogs: activeTodayFoods,
-    prevFoodLogs: activeYesterdayFoods,
-    exerciseLogs: activeTodayExercises,
-    fitbitActivities: todaySnap?.activities,
-  });
-
-  const hasYesterdayBreakfast = activeYesterdayFoods.some((f) => f.meal === 'breakfast' && (f.calories || 0) > 0);
+  const yesterdayUnits = Math.round(
+    yesterdayLogs.reduce((acc, e) => acc + getEntryUnits(e), 0) * 10,
+  ) / 10;
+  const yesterdayClearDay =
+    yesterdayUnits === 0 &&
+    (yesterdayLogs.some((e) => isClearDayEntry(e) || isZeroProofEntry(e)) ||
+      logs.some((e) => !e.ignored && getEntryDateKey(e) <= yesterdayIso && getEntryDateKey(e) !== ''));
 
   return {
-    runway,
-    vfPreview,
-    todayCaloriesIn,
-    todayProteinG,
-    proteinGoal,
-    yesterdaySurplusKcal,
-    hasYesterdayBreakfast,
+    trend,
+    yesterdayUnits,
+    yesterdayClearDay,
   };
 }
 
-/**
- * Composes a crisp, 3-second scannable Morning / Midday / Night message.
- */
+function getFirstName(displayName?: string | null): string {
+  const trimmed = (displayName || '').trim();
+  if (!trimmed) return '';
+  return trimmed.split(/\s+/)[0] || '';
+}
+
+function pickRecentAlcoholicCategory(logs: CoasterFoodLogEntry[]): {
+  count: number;
+  lastCategory?: DrinkCategory;
+} {
+  const alcoholic = logs.filter(
+    (e) => !e.ignored && !isClearDayEntry(e) && !isZeroProofEntry(e) && getEntryUnits(e) > 0,
+  );
+  const latest = alcoholic[alcoholic.length - 1];
+  return {
+    count: alcoholic.length,
+    lastCategory: latest?.drinkCategory,
+  };
+}
+
 export function composeOutreachDispatch(input: ComposeOutreachInput): ComposedOutreachMessage {
-  const {
-    runway,
-    vfPreview,
-    todayCaloriesIn,
-    todayProteinG,
-    proteinGoal,
-    yesterdaySurplusKcal,
-    hasYesterdayBreakfast,
-  } = buildOutreachRunwayContext(input);
+  const firstName = getFirstName(input.displayName);
+  const logs =
+    input.recentLogs ??
+    [...(input.yesterdayFoods ?? []), ...(input.todayFoods ?? [])];
+  const { trend, yesterdayUnits, yesterdayClearDay } = buildOutreachRunwayContext({
+    localDate: input.localDate,
+    recentLogs: logs,
+  });
 
-  const rx = runway.nutritionistRx;
-  const eatByClean = cleanClockLabel(rx.optimalEatByTimeLabel);
-  const breachClean = cleanClockLabel(runway.expectedBreachTimeLabel);
+  const lastTodayFallback =
+    input.lastFoodToday ??
+    (input.todayFoods && input.todayFoods.length > 0
+      ? input.todayFoods[input.todayFoods.length - 1]
+      : null);
+  const lastYesterdayFallback =
+    input.lastFoodYesterday ??
+    (input.yesterdayFoods && input.yesterdayFoods.length > 0
+      ? input.yesterdayFoods[input.yesterdayFoods.length - 1]
+      : null);
 
-  const autoSunsetBanner =
-    input.autoSunsetNotice === 'downshifted_to_morning'
-      ? 'Switched to Morning-Only briefings while things are quiet — tap "Resume 3x/Day" below any time.'
-      : undefined;
+  const lastFoodLine = buildLastFoodOnRecordLine({
+    localDate: input.localDate,
+    todayFoodsCount: input.todayFoodsCount ?? trend.todayEntriesCount,
+    lastFoodToday: lastTodayFallback,
+    lastFoodYesterday: lastYesterdayFallback,
+  });
 
-  let statusTone: 'good' | 'soon' | 'urgent' = 'good';
-  let subject = '';
-  let headline = '';
-  let body = '';
-  let goodFromYesterday = false;
-  let safeThroughTomorrowMorning = runway.safeThrough8amTomorrow;
-  let quickActions: QuickActionButton[] = [];
+  const sunset = evaluateAutoSunset({
+    localDate: input.localDate,
+    cadence: input.cadence ?? '2x',
+    lastInboundDate: input.lastInboundDate,
+    lastFoodDate: input.lastFoodDate,
+  });
+
+  const metricsLine = [
+    `Today ${formatUnits(trend.todayUnits)}`,
+    `7d avg ${formatUnits(trend.sevenDayAvg)}/day`,
+    `30d ${formatUnits(trend.thirtyDayTotal)} (${trend.clearDaysLast30} clear days)`,
+  ].join(' · ');
+
+  const alcoholicStats = pickRecentAlcoholicCategory(logs);
+  const swapSuggestion = shouldSuggestAlternative(alcoholicStats.count)
+    ? pickZeroProofAlternative(alcoholicStats.lastCategory, alcoholicStats.count + logs.length)
+    : undefined;
+
+  const greetingName = firstName ? `, ${firstName}` : '';
 
   if (input.window === 'morning') {
-    const bufferedFromYesterday =
-      yesterdaySurplusKcal >= 100 ||
-      (runway.overnightCarryoverKcal <= 120 && rx.hoursUntilOptimalEat >= 3.5) ||
-      (rx.cutIntensity === 'recharged' && rx.hoursUntilOptimalEat >= 2.5);
+    const yesterdaySummaryText = yesterdayClearDay
+      ? 'Yesterday finished as a Clear Day (0.0u).'
+      : yesterdayUnits > 0
+        ? `Yesterday wrapped at ${formatUnits(yesterdayUnits)}.`
+        : 'Fresh coaster slate ready for today.';
 
-    if (bufferedFromYesterday && eatByClean !== 'Now') {
-      goodFromYesterday = true;
-      statusTone = 'good';
-      headline = `Mostly burning body fat now — eat before ${eatByClean} to protect muscle`;
-      subject = `Morning Check-In: Burning fat — eat before ${eatByClean}`;
-      const surplusNote =
-        yesterdaySurplusKcal >= 100
-          ? `Yesterday left a +${yesterdaySurplusKcal} kcal fuel cushion, so your morning buffer is topped off.`
-          : `Overnight sleep burn was covered cleanly with ${Math.max(0, rx.usableNonFatBufferKcal)} kcal of buffer left.`;
-      body = `${surplusNote} You're mostly burning body fat right now (~${runway.fatFaucetHourlyKcal} kcal/hr) and won't risk dipping into muscle until ~${eatByClean} — have ~40–45g protein before then.`;
-    } else if (eatByClean === 'Now' || runway.status === 'eat_now') {
-      statusTone = 'urgent';
-      headline = `Starting to dip into muscle — eat ~40g protein now`;
-      subject = `Morning Check-In: Have ~40g protein soon`;
-      body = `Your overnight buffer is tapped out (-${Math.max(runway.overnightCarryoverKcal, runway.currentDeficitKcal)} kcal deficit), so waiting longer starts burning muscle alongside fat. Have ~40g lean protein now to switch back to pure fat burn (+${rx.psmfPulseGainHours}h runway).`;
-    } else {
-      statusTone = rx.hoursUntilOptimalEat <= 2.5 ? 'soon' : 'good';
-      headline = `Mostly burning body fat — eat ~40g protein before ${eatByClean}`;
-      subject = `Morning Check-In: First meal before ${eatByClean}`;
-      body =
-        runway.overnightCarryoverKcal > 0
-          ? `You're mostly burning body fat right now (~${Math.max(0, rx.usableNonFatBufferKcal)} kcal buffer left after yesterday's -${runway.overnightCarryoverKcal} kcal deficit). Eat ~40g lean protein before ${eatByClean} — after that point you start dipping into muscle.`
-          : `You're mostly burning body fat right now (~${runway.fatFaucetHourlyKcal} kcal/hr). Eat your first ~40–45g protein meal before ${eatByClean} so you don't start dipping into muscle.`;
-    }
-
-    quickActions = [
-      { action: 'still_fasting', label: 'Fasting til Lunch', style: 'primary' },
-      { action: 'protein_40', label: '+40g Protein Shake', style: 'secondary' },
-      hasYesterdayBreakfast
-        ? { action: 'same_breakfast', label: 'Same Breakfast as Yesterday', style: 'secondary' }
-        : { action: 'eggs_breakfast', label: '3 Eggs + Whites (32g P)', style: 'secondary' },
+    const bodyLines = [
+      `Good morning${greetingName}! ${yesterdaySummaryText}`,
+      `Your 7-day rolling pace sits at ${formatUnits(trend.sevenDayAvg)}/day, with ${trend.clearDaysLast30} clear days in the past 30 days.`,
+      swapSuggestion
+        ? `Zero-proof booth idea if you feel like mixing it up today: ${swapSuggestion}.`
+        : 'Reply in plain English with anything from last night, snap a receipt, or tap Clear Day 0.0u below.',
     ];
-  } else if (input.window === 'midday') {
-    const recentlyFed = rx.fatFaucetEfficiencyPct < 85 && todayCaloriesIn >= 150;
-    if (recentlyFed && eatByClean !== 'Now') {
-      statusTone = 'good';
-      const fatPeakClean = cleanClockLabel(rx.fatPeakTimeLabel);
-      headline = `Mostly burning meal energy now (shifts to fat ~${fatPeakClean}) — muscle-safe until ${eatByClean}`;
-      subject = `Midday Check-In: Muscle-safe until ${eatByClean}`;
-      body = `You're mostly running on your last meal's carbs & fuel right now, shifting back to mostly body-fat burn around ${fatPeakClean}. You won't risk losing muscle until ~${eatByClean} — have your next ~45g protein meal any time between ${fatPeakClean} and ${eatByClean} (${runway.proteinToGoG}g protein left today).`;
-    } else if (eatByClean === 'Now' || runway.status === 'eat_now') {
-      statusTone = 'urgent';
-      headline = `Starting to dip into muscle — eat ~45g protein now`;
-      subject = `Midday Check-In: Time for ~45g protein`;
-      body = `Your energy buffer is tapped out (${runway.currentDeficitKcal} kcal deficit so far), so waiting longer starts burning muscle alongside fat. Have ~45g lean protein now to protect muscle while keeping fat burn going.`;
-    } else {
-      statusTone = rx.hoursUntilOptimalEat <= 2 ? 'soon' : 'good';
-      headline = `Mostly burning body fat now — eat before ${eatByClean} to protect muscle`;
-      subject = `Midday Check-In: Eat before ${eatByClean}`;
-      body = `You're running mostly on body fat right now (~${runway.fatFaucetHourlyKcal} kcal/hr, ~${Math.max(0, rx.usableNonFatBufferKcal)} kcal buffer left). Eat ~45g protein before ${eatByClean} — waiting past ${eatByClean} starts dipping into muscle (${runway.proteinToGoG}g left toward ${proteinGoal}g).`;
-    }
 
-    quickActions = [
-      { action: 'protein_45_lunch', label: '+45g Lean Lunch (420 kcal)', style: 'primary' },
-      { action: 'protein_40', label: '+40g Protein Shake', style: 'secondary' },
-      { action: 'still_fasting', label: 'Still Fasting', style: 'secondary' },
-    ];
-  } else {
-    // Night dispatch (~7:00–7:30 PM local, or late-night manual check)
-    const scoreStr = `${vfPreview.score >= 0 ? '+' : ''}${vfPreview.score}`;
-    const nightDeadline = input.hoursElapsed >= 20.25 ? 'before bed' : 'by 8:30 PM';
-    if (runway.safeThrough8amTomorrow && runway.proteinToGoG <= 25) {
-      statusTone = 'good';
-      headline = `Muscle-safe through 8:00 AM tomorrow — close the kitchen`;
-      subject = `Evening Check-In: Kitchen closed (VF ${scoreStr})`;
-      body = `Overnight sleep runs mostly on body fat (~${runway.fatFaucetPerMinKcal} kcal/min) and your buffer easily clears 8:00 AM (+${runway.kcalBufferAt8amTomorrow} kcal) without touching muscle. Projected VF Score: ${scoreStr} pts.`;
-    } else if (!runway.safeThrough8amTomorrow) {
-      statusTone = runway.status === 'eat_now' ? 'urgent' : 'soon';
-      const neededKcal = Math.max(200, runway.kcalNeededFor8amTomorrow);
-      const neededProt = Math.min(50, Math.max(35, runway.proteinToGoG));
-      headline = `Add ~${neededProt}g protein (~${neededKcal} kcal) ${nightDeadline} to avoid overnight muscle loss`;
-      subject = `Evening Check-In: Have ~${neededProt}g protein ${nightDeadline}`;
-      body = `Without more fuel, your buffer runs out around ${breachClean} and starts dipping into muscle overnight. One lean ${neededProt}g protein meal ${nightDeadline} keeps you burning mostly fat through 8:00 AM (VF Score so far: ${scoreStr}).`;
-    } else {
-      // Calorie buffer clears 8 AM, but protein asset target is still notably short
-      statusTone = 'soon';
-      const pulseProt = Math.min(45, runway.proteinToGoG);
-      headline = `Calories clear 8:00 AM — add ~${pulseProt}g lean protein ${nightDeadline}`;
-      subject = `Evening Check-In: ~${pulseProt}g protein ${nightDeadline} (VF ${scoreStr})`;
-      body = `Your energy buffer already clears 8:00 AM (+${runway.kcalBufferAt8amTomorrow} kcal), so skip heavy carbs/fats — just add ~${pulseProt}g lean protein ${nightDeadline} to protect muscle overnight (${todayProteinG}/${proteinGoal}g logged).`;
-    }
-
-    quickActions = [
-      { action: 'kitchen_closed', label: 'Kitchen Closed', style: 'primary' },
-      { action: 'dinner_standard', label: '+50g Lean Dinner (580 kcal)', style: 'secondary' },
-      { action: 'protein_40', label: '+40g Evening Protein', style: 'secondary' },
-    ];
+    return {
+      window: 'morning',
+      localDate: input.localDate,
+      statusTone: 'good',
+      subject: `Sunny · Coaster Morning — ${yesterdayClearDay ? 'Clear Day yesterday' : yesterdayUnits > 0 ? `${formatUnits(yesterdayUnits)} yesterday` : 'Morning check-in'}`,
+      headline: `Morning booth check-in${greetingName}`,
+      body: bodyLines.join(' '),
+      lastFoodLine,
+      metricsLine,
+      quickActions: [
+        { action: 'log_clear_day', label: 'Clear Day 0.0u', style: 'primary' },
+        { action: 'log_beer', label: '+1.0u Beer', style: 'secondary' },
+        { action: 'log_wine', label: '+1.0u Wine', style: 'secondary' },
+        { action: 'log_cocktail', label: '+1.0u Cocktail/Shot', style: 'secondary' },
+        { action: 'log_zero_proof', label: '0.0u Zero-Proof', style: 'secondary' },
+      ],
+      ...(sunset.banner ? { autoSunsetBanner: sunset.banner } : {}),
+      todayUnits: trend.todayUnits,
+      yesterdayUnits,
+      sevenDayTotal: trend.sevenDayTotal,
+      sevenDayAvg: trend.sevenDayAvg,
+      thirtyDayTotal: trend.thirtyDayTotal,
+      clearDaysLast30: trend.clearDaysLast30,
+      zeroProofLast30: trend.zeroProofLast30,
+      ...(swapSuggestion ? { swapSuggestion } : {}),
+    };
   }
 
-  const lastFoodLine = buildLastFoodOnRecordLine(input.todayFoods, input.yesterdayFoods);
-  const scoreBadge = `VF ${vfPreview.score >= 0 ? '+' : ''}${vfPreview.score}`;
-  const metricsLine = `${todayCaloriesIn.toLocaleString()} kcal in · ${todayProteinG}/${proteinGoal}g protein · Fat faucet ${runway.fatFaucetHourlyKcal} kcal/hr · ${scoreBadge}`;
+  if (input.window === 'midday') {
+    const bodyLines = [
+      `Afternoon check-in${greetingName} — your coaster is sitting at ${formatUnits(trend.todayUnits)} so far today.`,
+      `7-day rolling average is ${formatUnits(trend.sevenDayAvg)}/day (${trend.clearDaysLast7} clear days this week).`,
+      swapSuggestion
+        ? `Refreshing patio pick: ${swapSuggestion}.`
+        : 'If you grabbed a lunch pint or crisp NA refresher, reply with a quick note or tap below.',
+    ];
+
+    return {
+      window: 'midday',
+      localDate: input.localDate,
+      statusTone: 'good',
+      subject: `Sunny · Coaster Afternoon — ${formatUnits(trend.todayUnits)} today`,
+      headline: `Afternoon booth check-in${greetingName}`,
+      body: bodyLines.join(' '),
+      lastFoodLine,
+      metricsLine,
+      quickActions: [
+        { action: 'log_zero_proof', label: '0.0u Zero-Proof', style: 'primary' },
+        { action: 'log_beer', label: '+1.0u Beer', style: 'secondary' },
+        { action: 'log_wine', label: '+1.0u Wine', style: 'secondary' },
+        { action: 'log_clear_day', label: 'Clear Day 0.0u', style: 'secondary' },
+      ],
+      ...(sunset.banner ? { autoSunsetBanner: sunset.banner } : {}),
+      todayUnits: trend.todayUnits,
+      yesterdayUnits,
+      sevenDayTotal: trend.sevenDayTotal,
+      sevenDayAvg: trend.sevenDayAvg,
+      thirtyDayTotal: trend.thirtyDayTotal,
+      clearDaysLast30: trend.clearDaysLast30,
+      zeroProofLast30: trend.zeroProofLast30,
+      ...(swapSuggestion ? { swapSuggestion } : {}),
+    };
+  }
+
+  // Night / Evening window (default 7:00 PM)
+  const eveningLead =
+    trend.todayUnits > 0
+      ? `You have ${formatUnits(trend.todayUnits)} on today's coaster so far.`
+      : 'Nothing poured on today\'s coaster yet.';
+  const bodyLines = [
+    `Evening check-in${greetingName}! ${eveningLead}`,
+    `Across the past 7 days you're averaging ${formatUnits(trend.sevenDayAvg)}/day, with ${trend.clearDaysLast30} clear days over the last 30 days.`,
+    swapSuggestion
+      ? `In case you want something cold with zero buzz later tonight: ${swapSuggestion}.`
+      : 'Reply with whatever you are sipping (or snap the tap list, wine bottle, or receipt), or hit a 1-tap button below.',
+  ];
 
   return {
-    window: input.window,
+    window: 'night',
     localDate: input.localDate,
-    statusTone,
-    subject,
-    headline,
-    body,
+    statusTone: trend.todayUnits >= 4 ? 'soon' : 'good',
+    subject: `Sunny · Coaster Evening — ${trend.todayUnits > 0 ? `${formatUnits(trend.todayUnits)} today` : 'Evening check-in'}`,
+    headline: `Evening booth check-in${greetingName}`,
+    body: bodyLines.join(' '),
     lastFoodLine,
     metricsLine,
-    eatByLabel: eatByClean,
-    goodFromYesterday,
-    safeThroughTomorrowMorning,
-    quickActions,
-    autoSunsetBanner,
-    runway,
-    vfPreview,
+    quickActions: [
+      { action: 'log_beer', label: '+1.0u Beer', style: 'primary' },
+      { action: 'log_wine', label: '+1.0u Wine', style: 'secondary' },
+      { action: 'log_cocktail', label: '+1.0u Cocktail/Shot', style: 'secondary' },
+      { action: 'log_zero_proof', label: '0.0u Zero-Proof', style: 'secondary' },
+      { action: 'log_clear_day', label: 'Clear Day 0.0u', style: 'secondary' },
+    ],
+    ...(sunset.banner ? { autoSunsetBanner: sunset.banner } : {}),
+    todayUnits: trend.todayUnits,
+    yesterdayUnits,
+    sevenDayTotal: trend.sevenDayTotal,
+    sevenDayAvg: trend.sevenDayAvg,
+    thirtyDayTotal: trend.thirtyDayTotal,
+    clearDaysLast30: trend.clearDaysLast30,
+    zeroProofLast30: trend.zeroProofLast30,
+    ...(swapSuggestion ? { swapSuggestion } : {}),
   };
 }
