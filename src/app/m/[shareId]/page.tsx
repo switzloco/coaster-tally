@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getAdminFirestore } from '@/firebase/admin';
-import { healthService } from '@/lib/health-service';
+import { adminHealthService as healthService } from '@/lib/health-service-admin';
 import { FoodLogEntry, SharedMeal, SharedMealItem } from '@/lib/food-exercise-types';
 import { formatUnits, getEntryUnits, isClearDayEntry } from '@/lib/drink-units';
 import { ShareView, type ShareDTO } from './share-view';
@@ -16,7 +16,7 @@ function computeShareUnits(items: SharedMealItem[]): number {
       id: 'share-item',
       timestamp: new Date(),
       date: '2026-01-01',
-    } as FoodLogEntry;
+    } as unknown as FoodLogEntry;
     if (!isClearDayEntry(asEntry)) {
       total += getEntryUnits(asEntry);
     }
@@ -66,7 +66,7 @@ export async function generateMetadata({
     const title = dto.createdByName
       ? `${dto.createdByName}'s Coaster: ${dto.title}`
       : `${dto.title} — Coaster`;
-    const description = `${formatUnits(dto.totalUnits)} across ${dto.items.length} ${
+    const description = `${formatUnits(dto.totalUnits ?? 0)} across ${dto.items.length} ${
       dto.items.length === 1 ? 'pour' : 'pours'
     } on Coaster.`;
 

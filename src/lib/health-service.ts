@@ -268,10 +268,13 @@ export type DrinkCategory =
   | 'ipa'
   | 'wine'
   | 'spirit'
+  | 'spirits'
   | 'cocktail'
   | 'seltzer'
   | 'zero_proof'
+  | 'zero-proof'
   | 'clear_day'
+  | 'clear-day'
   | 'other';
 
 export interface CoasterFoodLogEntry {
@@ -434,13 +437,15 @@ export function getEntryDateKey(entry: Partial<CoasterFoodLogEntry>): string {
 
 export function isClearDayEntry(entry: Partial<CoasterFoodLogEntry>): boolean {
   if (entry.ignored) return false;
-  if (entry.isClearDay || entry.drinkCategory === 'clear_day') return true;
+  if (entry.isClearDay || entry.drinkCategory === 'clear_day' || entry.drinkCategory === 'clear-day') {
+    return true;
+  }
   return /\bclear\s*day\b/i.test(entry.name || entry.foodName || '');
 }
 
 export function isZeroProofEntry(entry: Partial<CoasterFoodLogEntry>): boolean {
   if (entry.ignored || isClearDayEntry(entry)) return false;
-  return Boolean(entry.isZeroProof) || entry.drinkCategory === 'zero_proof';
+  return Boolean(entry.isZeroProof) || entry.drinkCategory === 'zero_proof' || entry.drinkCategory === 'zero-proof';
 }
 
 export function getEntryUnits(entry: Partial<CoasterFoodLogEntry>): number {
@@ -621,8 +626,9 @@ const ZERO_PROOF_BY_CATEGORY: Record<string, string[]> = {
 };
 
 export function pickZeroProofAlternative(category?: DrinkCategory, seed = 0): string {
+  const key = category === 'spirits' ? 'spirit' : category;
   const pool =
-    (category && ZERO_PROOF_BY_CATEGORY[category]) || ZERO_PROOF_BY_CATEGORY.default;
+    (key && ZERO_PROOF_BY_CATEGORY[key]) || ZERO_PROOF_BY_CATEGORY.default;
   const idx = Math.abs(Math.floor(seed)) % pool.length;
   return pool[idx];
 }

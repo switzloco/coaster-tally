@@ -55,9 +55,9 @@ export function buildDiscordOutreachPayload(params: {
   } as const;
 
   const windowTitles = {
-    morning: 'the CFO · Morning Briefing',
-    midday: 'the CFO · Midday Pulse',
-    night: 'the CFO · Evening Closeout',
+    morning: 'Sunny · Coaster Morning Check-In',
+    midday: 'Sunny · Coaster Midday Check-In',
+    night: 'Sunny · Coaster Evening Check-In',
   } as const;
 
   const quickButtons: Array<Record<string, unknown>> = composed.quickActions.slice(0, 3).map((btn) => ({
@@ -212,7 +212,7 @@ export function buildDiscordLedgerStatusPayload(params: {
   return {
     embeds: [
       {
-        author: { name: `the CFO · Live Ledger (${composed.localDate})` },
+        author: { name: `Sunny · Coaster (${composed.localDate})` },
         title: composed.headline,
         description: `${composed.body}\n\n**Protein:** \`${proteinBar}\`\n**Plants:** \`${plantBar}\`\n**Calories In:** \`${totalKcal} kcal\`\n\n**Today's Logged Entries (${todayFoods.length}):**\n${mealLines}${yesterdayBlock}`,
         color: colors[composed.statusTone],

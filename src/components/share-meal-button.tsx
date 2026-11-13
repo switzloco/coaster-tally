@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useUser } from '@/firebase';
 import { createMealShare } from '@/app/actions/share-meal';
-import { shareUrl } from '@/lib/share-text';
+import { shareUrl } from '@/lib/site';
 import { useToast } from '@/hooks/use-toast';
 import { Check, Loader2, Share2 } from 'lucide-react';
 

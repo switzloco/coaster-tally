@@ -125,7 +125,7 @@ export function AddToHomePrompt() {
               <Download className="w-6 h-6 text-primary" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[15px] font-extrabold text-foreground leading-snug">Get the CFO App</p>
+              <p className="text-[15px] font-extrabold text-foreground leading-snug">Get the Coaster App</p>
               <p className="text-[12.5px] text-muted-foreground mt-1.5 leading-relaxed">
                 Add this to your home screen for easy one-tap access. It is <strong>100% free</strong>, takes only 10 seconds, and <strong>requires no passwords</strong>.
               </p>

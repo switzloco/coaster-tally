@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
     ? /^re:/i.test(inboundSubject)
       ? inboundSubject
       : `Re: ${inboundSubject}`
-    : `the CFO: ${result.headline}`;
+    : `Sunny · Coaster: ${result.headline}`;
 
   await sendOutreachReplyConfirmationEmail({
     to: senderEmail,

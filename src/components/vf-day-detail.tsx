@@ -36,13 +36,6 @@ import {
 
 interface CoasterFoodLogEntry extends FoodLogEntry {
   id: string;
-  standardUnits?: number;
-  isClearDay?: boolean;
-  isZeroProof?: boolean;
-  drinkCategory?: string;
-  volumeOz?: number;
-  abvPct?: number;
-  alternativeSuggested?: string;
 }
 
 export interface VfDayDetailProps {

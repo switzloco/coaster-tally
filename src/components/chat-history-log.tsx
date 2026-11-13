@@ -68,7 +68,7 @@ export function ChatHistoryLog() {
                     {msgs.map((m, i) => (
                       <div key={i} className={m.role === 'user' ? 'flex flex-col items-end' : 'flex flex-col items-start'}>
                         <span className="text-[9px] font-bold text-muted-foreground uppercase mb-1 px-1">
-                          {m.role === 'model' ? 'the CFO' : 'You'}
+                          {m.role === 'model' ? 'Sunny' : 'You'}
                         </span>
                         <div className={m.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}>
                           {m.hasImages && (

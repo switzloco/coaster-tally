@@ -106,34 +106,46 @@ export function QuarterlyEarningsModal() {
       const stats = computeTrendSummary(recentLogs);
       setSummaryStats(stats);
 
-      const rawResult = (await runTrendReflectionWithFallback({
+      const rawResult = await runTrendReflectionWithFallback({
         firebaseApp,
         logs: recentLogs,
         secPrivacyLock,
-      })) as Partial<TrendSpotterReport> & {
+      });
+      const rawExtras = rawResult as unknown as {
         executiveSummary?: string;
         capitalDirectives?: string[];
-        receipt: HybridExecutionReceipt;
+        mixBreakdown?: string | Array<{ label?: string; category?: string; units?: number; pct?: number }>;
       };
+
+      const formattedMix =
+        typeof rawExtras.mixBreakdown === 'string' && rawExtras.mixBreakdown.trim()
+          ? rawExtras.mixBreakdown
+          : Array.isArray(rawResult.mixBreakdown) && rawResult.mixBreakdown.length > 0
+            ? rawResult.mixBreakdown
+                .map((m) =>
+                  m.category === 'zero-proof'
+                    ? `${m.label}: ${m.units} swap${m.units === 1 ? '' : 's'}`
+                    : `${m.label}: ${formatUnits(m.units)} (${m.pct}%)`
+                )
+                .join(' · ')
+            : 'Across beer, wine, cocktails, and zero-proof pours, noticing your baseline is the clearest step.';
 
       const normalizedReport: TrendSpotterReport = {
         headline:
           rawResult.headline || "Sunny's 30-Day Coaster Snapshot",
         rhythmInsight:
           rawResult.rhythmInsight ||
-          rawResult.executiveSummary ||
+          rawExtras.executiveSummary ||
           `You averaged ${formatUnits(stats.sevenDayAvg)}/day over the last week and tallied ${formatUnits(stats.thirtyDayTotal)} across the last 30 days.`,
         clearDayHighlight:
           rawResult.clearDayHighlight ||
           `You noticed ${stats.clearDaysLast30} Clear Day${stats.clearDaysLast30 === 1 ? '' : 's'} and ${stats.zeroProofSwapsLast30} Zero-Proof Swap${stats.zeroProofSwapsLast30 === 1 ? '' : 's'} in the past month.`,
-        mixBreakdown:
-          rawResult.mixBreakdown ||
-          'Across beer, wine, cocktails, and zero-proof pours, noticing your baseline is the clearest step.',
+        mixBreakdown: formattedMix,
         swapIdeas:
           Array.isArray(rawResult.swapIdeas) && rawResult.swapIdeas.length > 0
             ? rawResult.swapIdeas.slice(0, 4)
-            : Array.isArray(rawResult.capitalDirectives) && rawResult.capitalDirectives.length > 0
-              ? rawResult.capitalDirectives.slice(0, 4)
+            : Array.isArray(rawExtras.capitalDirectives) && rawExtras.capitalDirectives.length > 0
+              ? rawExtras.capitalDirectives.slice(0, 4)
               : [
                   'Sparkling yuzu over crushed ice with a twist of rosemary',
                   'Chilled Phony Negroni or bitter blood-orange apéritif spritz',

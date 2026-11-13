@@ -16,6 +16,7 @@ import {
   isClearDayEntry,
   isZeroProofEntry,
   mlToOz,
+  normalizeDrinkCategory,
   standardUnitsToGrams,
 } from '../drink-units';
 import {
@@ -37,9 +38,13 @@ function makeLog(
       volumeOz: opts?.volumeOz ?? (units > 0 ? 12 : 0),
       abvPct: opts?.abvPct ?? (units > 0 ? 5 : 0),
       standardUnits: units,
-      category:
-        opts?.drinkCategory ??
-        (opts?.isClearDay ? 'clear-day' : opts?.isZeroProof ? 'zero-proof' : 'beer'),
+      category: opts?.drinkCategory
+        ? normalizeDrinkCategory(opts.drinkCategory)
+        : opts?.isClearDay
+          ? 'clear-day'
+          : opts?.isZeroProof
+            ? 'zero-proof'
+            : 'beer',
       isZeroProof: opts?.isZeroProof,
       isClearDay: opts?.isClearDay,
       date,

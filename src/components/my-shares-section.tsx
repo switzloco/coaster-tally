@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { useUser } from '@/firebase';
 import { getMyShares, revokeShare } from '@/app/actions/share-meal';
-import { shareUrl } from '@/lib/share-text';
+import { shareUrl } from '@/lib/site';
 import { formatUnits } from '@/lib/drink-units';
 import { useToast } from '@/hooks/use-toast';
 import { Copy, ExternalLink, Loader2, Share2, Trash2 } from 'lucide-react';

@@ -32,6 +32,7 @@ import {
 } from '@/lib/hybrid-ai';
 import {
   formatUnits,
+  normalizeDrinkCategory,
   type DrinkCategory,
 } from '@/lib/drink-units';
 import { inferMealFromTime } from '@/lib/food-exercise-types';
@@ -145,15 +146,30 @@ export function HybridTickerTerminal({
         : [];
 
     const items: ParsedDrinkDraft[] = rawItems.map((item) => {
-      const isClear = Boolean(item.isClearDay || item.category === 'clear-day' || item.drinkCategory === 'clear-day');
-      const isZp = Boolean(item.zeroProof || item.isZeroProof || item.category === 'zero-proof' || item.drinkCategory === 'zero-proof');
+      const isClear = Boolean(
+        item.isClearDay ||
+          item.category === 'clear-day' ||
+          item.drinkCategory === 'clear-day' ||
+          item.drinkCategory === 'clear_day'
+      );
+      const isZp = Boolean(
+        item.zeroProof ||
+          item.isZeroProof ||
+          item.category === 'zero-proof' ||
+          item.drinkCategory === 'zero-proof' ||
+          item.drinkCategory === 'zero_proof'
+      );
       const units = Number(
         item.standardUnits ?? item.units ?? item.alcoholDrinks ?? (isClear || isZp ? 0 : 1)
       );
-      const category: DrinkCategory =
-        item.category ??
-        item.drinkCategory ??
-        (isClear ? 'clear-day' : isZp ? 'zero-proof' : 'beer');
+      const rawCat = item.category ?? item.drinkCategory;
+      const category: DrinkCategory = rawCat
+        ? normalizeDrinkCategory(rawCat)
+        : isClear
+          ? 'clear-day'
+          : isZp
+            ? 'zero-proof'
+            : 'beer';
 
       return {
         name: String(item.name || (isClear ? 'Clear Day' : 'Standard Pour')),

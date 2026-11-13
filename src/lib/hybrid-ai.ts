@@ -49,6 +49,7 @@ import {
   getSunnySwapSuggestion,
   isClearDayEntry,
   isZeroProofEntry,
+  normalizeDrinkCategory,
   shouldOfferBuddySwap,
   type DrinkCategory,
   type TrendSummary,
@@ -1748,11 +1749,11 @@ function computeDrinkMixBreakdown(logs: FoodLogEntry[], days = 30): TrendMixItem
   for (const entry of sample) {
     if (isClearDayEntry(entry)) continue;
     const units = getEntryUnits(entry);
-    const cat: DrinkCategory =
-      entry.drinkCategory ??
-      (isZeroProofEntry(entry)
+    const cat: DrinkCategory = entry.drinkCategory
+      ? normalizeDrinkCategory(entry.drinkCategory)
+      : isZeroProofEntry(entry)
         ? 'zero-proof'
-        : reconcileDrinkDescription(entry.name || '')?.category ?? 'beer');
+        : reconcileDrinkDescription(entry.name || '')?.category ?? 'beer';
 
     if (cat === 'zero-proof' || units === 0) {
       byCategory.set('zero-proof', (byCategory.get('zero-proof') ?? 0) + 1);

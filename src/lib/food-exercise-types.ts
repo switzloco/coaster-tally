@@ -15,6 +15,14 @@ export type DrinkCategory =
   | 'zero-proof'
   | 'clear-day';
 
+export type AnyDrinkCategory =
+  | DrinkCategory
+  | 'ipa'
+  | 'spirit'
+  | 'zero_proof'
+  | 'clear_day'
+  | 'other';
+
 export interface FoodItem {
   id?: string;
   name: string;
@@ -23,7 +31,7 @@ export interface FoodItem {
   abvPct?: number;
   units?: number;
   standardUnits?: number;
-  category?: DrinkCategory;
+  category?: AnyDrinkCategory;
   zeroProof?: boolean;
   isClearDay?: boolean;
   alternativeSuggested?: string;
@@ -46,7 +54,7 @@ export interface FoodLogEntry {
   abvPct?: number;
   isClearDay?: boolean;
   isZeroProof?: boolean;
-  drinkCategory?: DrinkCategory;
+  drinkCategory?: AnyDrinkCategory;
   alternativeSuggested?: string;
   dayCountOverride?: number;
   notes?: string;

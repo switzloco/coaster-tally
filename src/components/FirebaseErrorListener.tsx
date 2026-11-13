@@ -58,7 +58,7 @@ export function FirebaseErrorListener() {
         {/* Content */}
         <div className="p-6 space-y-4">
           <p className="text-xs text-muted-foreground leading-relaxed">
-            The CFO terminal encountered a database access exception while attempting to sync ledger data. This may be due to an expired session or temporary server rules synchronization.
+            Coaster encountered a database access exception while attempting to sync ledger data. This may be due to an expired session or temporary server rules synchronization.
           </p>
 
           <div className="bg-muted/50 border rounded-xl p-4.5 space-y-2">

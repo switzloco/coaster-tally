@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og';
 import { getAdminFirestore } from '@/firebase/admin';
-import { healthService } from '@/lib/health-service';
-import { FoodLogEntry } from '@/lib/food-exercise-types';
+import { adminHealthService as healthService } from '@/lib/health-service-admin';
+import { FoodLogEntry, type SharedMealItem } from '@/lib/food-exercise-types';
 import { formatUnits, getEntryUnits, isClearDayEntry } from '@/lib/drink-units';
 
 export const runtime = 'nodejs';
@@ -30,18 +30,18 @@ export default async function OgImage({
       const items = share.items ?? [];
       totalUnits =
         Math.round(
-          items.reduce((sum, item) => {
+          items.reduce((sum: number, item: SharedMealItem) => {
             const asEntry = {
               ...item,
               id: 'og',
               timestamp: new Date(),
               date: '2026-01-01',
-            } as FoodLogEntry;
+            } as unknown as FoodLogEntry;
             return sum + (isClearDayEntry(asEntry) ? 0 : getEntryUnits(asEntry));
           }, 0) * 10
         ) / 10;
       pourNames = items
-        .map((i) => i.name)
+        .map((i: SharedMealItem) => i.name)
         .filter(Boolean)
         .slice(0, 4);
     }

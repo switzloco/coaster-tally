@@ -230,10 +230,41 @@ function formatShortUtcDate(isoDate: string): string {
   });
 }
 
+/** Normalizes canonical and outreach/legacy category variants into DrinkCategory. */
+export function normalizeDrinkCategory(raw?: string | null): DrinkCategory {
+  switch (raw) {
+    case 'beer':
+    case 'ipa':
+      return 'beer';
+    case 'wine':
+      return 'wine';
+    case 'spirits':
+    case 'spirit':
+      return 'spirits';
+    case 'cocktail':
+    case 'other':
+      return 'cocktail';
+    case 'seltzer':
+      return 'seltzer';
+    case 'zero-proof':
+    case 'zero_proof':
+      return 'zero-proof';
+    case 'clear-day':
+    case 'clear_day':
+      return 'clear-day';
+    default:
+      return 'cocktail';
+  }
+}
+
 /** Returns true if an entry marks an explicit Clear Day (alcohol-free check-in). */
 export function isClearDayEntry(entry: FoodLogEntry): boolean {
   if (!entry || entry.ignored) return false;
-  if (entry.isClearDay === true || entry.drinkCategory === 'clear-day') {
+  if (
+    entry.isClearDay === true ||
+    entry.drinkCategory === 'clear-day' ||
+    entry.drinkCategory === 'clear_day'
+  ) {
     return true;
   }
   if (entry.meal === 'clear-day' && !(typeof entry.standardUnits === 'number' && entry.standardUnits > 0)) {
@@ -245,7 +276,11 @@ export function isClearDayEntry(entry: FoodLogEntry): boolean {
 /** Returns true if an entry is a zero-proof / non-alcoholic beverage swap. */
 export function isZeroProofEntry(entry: FoodLogEntry): boolean {
   if (!entry || entry.ignored || isClearDayEntry(entry)) return false;
-  return entry.isZeroProof === true || entry.drinkCategory === 'zero-proof';
+  return (
+    entry.isZeroProof === true ||
+    entry.drinkCategory === 'zero-proof' ||
+    entry.drinkCategory === 'zero_proof'
+  );
 }
 
 /**

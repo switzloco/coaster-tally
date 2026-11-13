@@ -11,8 +11,8 @@ export async function submitContactForm(data: {
   uid?: string;
   context?: string;
 }) {
-  const name = (data.name || 'Partner').trim().slice(0, 100);
-  const email = (data.email || 'anonymous@cfofitness.app').trim().slice(0, 150);
+  const name = (data.name || 'Friend').trim().slice(0, 100);
+  const email = (data.email || 'anonymous@coaster.app').trim().slice(0, 150);
   const message = (data.message || '').trim().slice(0, 3000);
 
   if (!message) {
@@ -38,10 +38,10 @@ export async function submitContactForm(data: {
   // 2. Also email Nick directly when RESEND_API_KEY is configured
   const html = `
     <div style="font-family: sans-serif; max-width: 600px;">
-      <h2>New CFO Fitness Feedback / Note</h2>
+      <h2>New Coaster Feedback / Note</h2>
       <p><strong>Name:</strong> ${name}</p>
       <p><strong>Email / Contact:</strong> ${email}</p>
-      ${data.uid ? `<p><strong>Portfolio UID:</strong> <code>${data.uid}</code></p>` : ''}
+      ${data.uid ? `<p><strong>Coaster UID:</strong> <code>${data.uid}</code></p>` : ''}
       ${data.context ? `<p><strong>Context:</strong> ${data.context}</p>` : ''}
       <hr />
       <p><strong>Message:</strong></p>
@@ -51,7 +51,7 @@ export async function submitContactForm(data: {
 
   await sendAdminReportEmail(
     'nicholas.switzer@gmail.com',
-    `[the CFO] Note from ${name} (${email})`,
+    `[Coaster] Note from ${name} (${email})`,
     html,
   ).catch((err) => {
     console.warn('[submitContactForm] Email delivery skipped/failed (saved to Firestore):', err);

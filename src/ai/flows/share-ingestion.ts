@@ -193,7 +193,7 @@ export const shareIngestionFlow = ai.defineFlow(
             ? 'clear_day'
             : isZero
               ? 'zero_proof'
-              : d.drinkCategory ?? 'other') as DrinkCategory,
+              : d.drinkCategory ?? 'other') as z.infer<typeof DrinkCategorySchema>,
           standardUnits: computedUnits,
           isClearDay: isClear,
           isZeroProof: isZero,

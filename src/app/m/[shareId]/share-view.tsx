@@ -28,14 +28,7 @@ import {
   Wine,
 } from 'lucide-react';
 
-interface CoasterShareItem extends SharedMealItem {
-  standardUnits?: number;
-  isClearDay?: boolean;
-  isZeroProof?: boolean;
-  volumeOz?: number;
-  abvPct?: number;
-  drinkCategory?: string;
-}
+type CoasterShareItem = SharedMealItem;
 
 export interface ShareDTO {
   id: string;
@@ -67,7 +60,7 @@ function itemUnits(item: CoasterShareItem): number {
     id: 'preview',
     timestamp: new Date(),
     date: '2026-01-01',
-  } as FoodLogEntry);
+  } as unknown as FoodLogEntry);
 }
 
 function itemIsClear(item: CoasterShareItem): boolean {
@@ -76,7 +69,7 @@ function itemIsClear(item: CoasterShareItem): boolean {
     id: 'preview',
     timestamp: new Date(),
     date: '2026-01-01',
-  } as FoodLogEntry);
+  } as unknown as FoodLogEntry);
 }
 
 function itemIsZeroProof(item: CoasterShareItem): boolean {
@@ -85,7 +78,7 @@ function itemIsZeroProof(item: CoasterShareItem): boolean {
     id: 'preview',
     timestamp: new Date(),
     date: '2026-01-01',
-  } as FoodLogEntry);
+  } as unknown as FoodLogEntry);
 }
 
 export function ShareView({ share }: { share: ShareDTO }) {

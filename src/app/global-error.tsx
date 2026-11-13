@@ -38,7 +38,7 @@ export default function GlobalError({
           {/* Content */}
           <div className="p-6 space-y-4">
             <p className="text-xs text-muted-foreground leading-relaxed">
-              The CFO core systems encountered a critical layout-level exception. A terminal reboot is recommended to restore operations and clear corrupted states.
+              Coaster encountered a critical layout-level exception. A refresh is recommended to restore operations cleanly.
             </p>
 
             {error.message && (
