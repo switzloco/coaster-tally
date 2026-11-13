@@ -45,7 +45,9 @@ import {
 import { sendOutreachDiscordDM } from './outreach-discord';
 import {
   extractCleanReplyText,
+  inferReplyDayOffset,
   parseOutreachMealText,
+  resolveEntryConsumedAt,
   type OutreachImageAttachment,
 } from '@/ai/flows/outreach-meal-parser';
 import { backfillScoreHistory } from './score-history-sync';
@@ -1081,10 +1083,13 @@ export async function processOutreachFreeTextMeal(params: {
     consumedAt: f.consumedAt,
   });
 
+  const cleanReplyInput = extractCleanReplyText(params.rawText);
   const parsed = await parseOutreachMealText({
     uid: params.uid,
     rawText: params.rawText,
     localTime: clock.localTime,
+    localDate: clock.localDate,
+    yesterdayDate: yesterdayIso,
     photoDataUris: params.photoDataUris,
     todayFoods: (todayFoodsBeforeParse as CoasterFoodLogEntry[]).map(mapContext),
     yesterdayFoods: (yesterdayFoodsBeforeParse as CoasterFoodLogEntry[]).map(mapContext),
@@ -1200,14 +1205,29 @@ export async function processOutreachFreeTextMeal(params: {
   const isAddingAnother = /\b(another|second|third|one more|another round|refill)\b/i.test(
     params.rawText,
   );
+  const replyFallbackOffset = inferReplyDayOffset(cleanReplyInput);
+  const parsedExplicitYesterday = entriesToLog.some(
+    (entry) => entry.dayOffset !== undefined && entry.dayOffset < 0,
+  );
   const loggedIds: string[] = [];
   const loggedDateSet = new Set<string>();
   const entryLabels: string[] = [];
 
   for (const item of entriesToLog) {
-    const isYesterday = Boolean(item.dayOffset && item.dayOffset < 0);
+    const resolvedOffset =
+      item.dayOffset !== undefined && item.dayOffset < 0
+        ? -1
+        : !parsedExplicitYesterday && replyFallbackOffset < 0
+          ? -1
+          : 0;
+    const isYesterday = resolvedOffset < 0 || item.date === yesterdayIso;
     const targetDate = isYesterday ? yesterdayIso : clock.localDate;
-    const resolvedTime = item.consumedAt || (isYesterday ? '20:30' : clock.localTime);
+    const resolvedTime = resolveEntryConsumedAt({
+      dayOffset: isYesterday ? -1 : 0,
+      meal: item.meal,
+      explicitConsumedAt: item.consumedAt,
+      localTime: clock.localTime,
+    });
     const units =
       item.isClearDay || item.isZeroProof
         ? 0
@@ -1264,7 +1284,7 @@ export async function processOutreachFreeTextMeal(params: {
     { merge: true },
   );
 
-  if (loggedDateSet.has(yesterdayIso) && !loggedDateSet.has(clock.localDate)) {
+  if (loggedDateSet.has(yesterdayIso)) {
     await refreshDailyFoodCounters(params.uid, yesterdayIso);
   }
   await refreshDailyFoodCounters(params.uid, clock.localDate);

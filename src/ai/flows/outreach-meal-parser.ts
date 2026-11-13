@@ -11,6 +11,7 @@ import { ai, CFO_LITE_MODEL, CFO_MODEL } from '@/ai/genkit';
 import { z } from 'genkit';
 import { trackAiUsage } from '@/lib/ai-usage';
 import { inferMealFromTime } from '@/lib/food-exercise-types';
+import { addIsoDays } from '@/lib/outreach-auth';
 import {
   calculateStandardUnits,
   formatUnits,
@@ -79,6 +80,7 @@ export const ParsedOutreachMealItemSchema = z.object({
     .string()
     .optional()
     .describe('24-hour HH:MM when enjoyed (e.g. "last night" -> "20:30", "at 6pm" -> "18:00"); omit if just now.'),
+  date: z.string().optional().describe('Optional YYYY-MM-DD local date key resolved for this entry.'),
   meal: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).optional(),
   source: z.enum(['usda', 'user_estimate']).optional(),
 });
@@ -139,6 +141,7 @@ export const ParsedOutreachMealSchema = z.object({
   hasSeedOils: z.boolean().optional(),
   dayOffset: z.number().optional().describe('0 for today (default), -1 for yesterday / "last night".'),
   consumedAt: z.string().optional().describe('24-hour HH:MM if user stated when they drank (e.g. "last night" -> "20:30").'),
+  date: z.string().optional().describe('Optional YYYY-MM-DD local date key resolved for this entry.'),
   meal: z.enum(['breakfast', 'lunch', 'dinner', 'snack']).optional(),
   source: z.enum(['usda', 'user_estimate']).default('user_estimate'),
   entries: z
@@ -251,6 +254,20 @@ export interface OutreachLedgerContextItem {
   date?: string;
 }
 
+/**
+ * Deterministic check for "last night" / "yesterday" phrasing when the reply
+ * does not simultaneously refer to today/tonight/now.
+ */
+export function inferReplyDayOffset(cleanText: string): -1 | 0 {
+  if (!cleanText) return 0;
+  const mentionsYesterday = /\b(last\s+night|yesterday(?:'s)?|yestereve)\b/i.test(cleanText);
+  const mentionsToday =
+    /\b(today(?:'s)?|tonight|this\s+(?:morning|afternoon|evening)|right\s+now|just\s+now)\b/i.test(
+      cleanText,
+    );
+  return mentionsYesterday && !mentionsToday ? -1 : 0;
+}
+
 export function resolveEntryConsumedAt(params: {
   dayOffset: number;
   meal?: 'breakfast' | 'lunch' | 'dinner' | 'snack';
@@ -285,14 +302,22 @@ function normalizeParsedDrinkItem(
   item: ParsedOutreachMealItem,
   localTime: string,
   defaultSource: 'usda' | 'user_estimate',
+  forcedDayOffset?: -1 | 0,
+  dateContext?: { localDate?: string; yesterdayDate?: string },
 ): ParsedOutreachMealItem {
-  const dayOffset = item.dayOffset && item.dayOffset < 0 ? -1 : 0;
+  const dayOffset: -1 | 0 =
+    (item.dayOffset && item.dayOffset < 0) || forcedDayOffset === -1 ? -1 : 0;
   const resolvedTime = resolveEntryConsumedAt({
     dayOffset,
     meal: item.meal,
     explicitConsumedAt: item.consumedAt,
     localTime,
   });
+  const resolvedDate =
+    dayOffset < 0
+      ? dateContext?.yesterdayDate ||
+        (dateContext?.localDate ? addIsoDays(dateContext.localDate, -1) : item.date)
+      : dateContext?.localDate || item.date;
 
   const isClear =
     Boolean(item.isClearDay) ||
@@ -337,6 +362,7 @@ function normalizeParsedDrinkItem(
     fatG: item.fatG ?? 0,
     dayOffset,
     consumedAt: resolvedTime,
+    ...(resolvedDate ? { date: resolvedDate } : {}),
     meal: item.meal ?? inferMealFromTime(resolvedTime),
     source: item.source ?? defaultSource,
   };
@@ -359,6 +385,8 @@ export async function parseOutreachMealText(params: {
   uid: string;
   rawText: string;
   localTime: string;
+  localDate?: string;
+  yesterdayDate?: string;
   photoDataUris?: OutreachImageAttachment[];
   todayFoods?: OutreachLedgerContextItem[];
   yesterdayFoods?: OutreachLedgerContextItem[];
@@ -443,9 +471,15 @@ export async function parseOutreachMealText(params: {
   const swapHintLine = `suggestZeroProofSwap: ${suggestZeroProofSwap ? 'YES (include one crisp tailored recommendation in alternativeSuggested)' : 'NO (skip alternativeSuggested unless explicitly asked)'}\n`;
   const ledgerContext = `${clientNameLine}${swapHintLine}${todayLedgerContext}\n${yesterdayLedgerContext}`;
 
+  const resolvedYesterdayDate =
+    params.yesterdayDate || (params.localDate ? addIsoDays(params.localDate, -1) : undefined);
+  const dateHeaderLine = params.localDate
+    ? `Local date: ${params.localDate} (Yesterday: ${resolvedYesterdayDate}) · Local time: ${params.localTime}`
+    : `Local time: ${params.localTime}`;
+
   const textPrompt = cleanText
-    ? `Local time: ${params.localTime}\n${ledgerContext}\nFriend message: "${cleanText}"`
-    : `Local time: ${params.localTime}\n${ledgerContext}\nFriend attached ${photos.length} photo(s) (bottle, can, glass, menu, or receipt) with no text — identify the drink(s), volume oz, and ABV% and calculate Standard Drink Units.`;
+    ? `${dateHeaderLine}\n${ledgerContext}\nFriend message: "${cleanText}"`
+    : `${dateHeaderLine}\n${ledgerContext}\nFriend attached ${photos.length} photo(s) (bottle, can, glass, menu, or receipt) with no text — identify the drink(s), volume oz, and ABV% and calculate Standard Drink Units.`;
 
   const promptParts = hasPhotos
     ? [
@@ -485,9 +519,28 @@ export async function parseOutreachMealText(params: {
 
   const defaultSource = output.source ?? 'user_estimate';
   const rawEntries = (output.entries ?? []).filter((e) => e && e.name && e.name.trim().length > 0);
+  const inferredReplyOffset = inferReplyDayOffset(cleanText);
+  const hasExplicitYesterday =
+    (output.dayOffset !== undefined && output.dayOffset < 0) ||
+    rawEntries.some((e) => e.dayOffset !== undefined && e.dayOffset < 0);
+  const fallbackForcedOffset: -1 | 0 =
+    inferredReplyOffset === -1 && !hasExplicitYesterday ? -1 : 0;
+  const dateCtx = {
+    localDate: params.localDate,
+    yesterdayDate: resolvedYesterdayDate,
+  };
+
   const normalizedEntries: ParsedOutreachMealItem[] =
     rawEntries.length > 0
-      ? rawEntries.map((entry) => normalizeParsedDrinkItem(entry, params.localTime, defaultSource))
+      ? rawEntries.map((entry) =>
+          normalizeParsedDrinkItem(
+            entry,
+            params.localTime,
+            defaultSource,
+            fallbackForcedOffset,
+            dateCtx,
+          ),
+        )
       : output.isFoodLog && output.name?.trim()
         ? [
             normalizeParsedDrinkItem(
@@ -516,15 +569,23 @@ export async function parseOutreachMealText(params: {
               },
               params.localTime,
               defaultSource,
+              fallbackForcedOffset,
+              dateCtx,
             ),
           ]
         : [];
 
   const primary = normalizedEntries[0];
+  const resolvedDayOffset =
+    primary?.dayOffset ??
+    (output.dayOffset && output.dayOffset < 0 ? -1 : fallbackForcedOffset);
+  const resolvedPrimaryDate =
+    primary?.date ||
+    (resolvedDayOffset < 0 ? resolvedYesterdayDate : params.localDate);
   const resolvedPrimaryTime =
     primary?.consumedAt ||
     resolveEntryConsumedAt({
-      dayOffset: output.dayOffset && output.dayOffset < 0 ? -1 : 0,
+      dayOffset: resolvedDayOffset,
       meal: output.meal,
       explicitConsumedAt: output.consumedAt,
       localTime: params.localTime,
@@ -589,8 +650,9 @@ export async function parseOutreachMealText(params: {
       normalizedEntries.length > 0
         ? normalizedEntries.reduce((s, e) => s + (e.fatG || 0), 0)
         : output.fatG ?? 0,
-    dayOffset: primary?.dayOffset ?? (output.dayOffset && output.dayOffset < 0 ? -1 : 0),
+    dayOffset: resolvedDayOffset,
     consumedAt: resolvedPrimaryTime,
+    ...(resolvedPrimaryDate ? { date: resolvedPrimaryDate } : {}),
     meal: primary?.meal ?? output.meal ?? inferMealFromTime(resolvedPrimaryTime),
     entries: normalizedEntries,
   };

@@ -128,7 +128,7 @@ export async function enrollEmail(
     await adminHealthService.appendChatMessages(db, uid, clock.localDate, [
       {
         role: 'model',
-        content: `**A New Journey, ${firstName}** — pull up a seat at the booth!\n\nI'm **Sunny**, your non-drinking booth-buddy at Coaster (sparkling yuzu fan, zero judgment, zero lectures). Whenever you want, drop what you're sipping in plain English, snap a tap list or bottle label, or tap **Clear Day** — I'll handle the NIAAA Standard Drink Units (\`1.0u\` = 12oz 5% beer / 5oz 12% wine / 1.5oz 40% spirit) and keep your trends crystal clear.`,
+        content: `**A New Journey, ${firstName}** — pull up a seat at the booth!\n\nI'm **Sunny**, your non-drinking booth-buddy at Coaster (sparkling yuzu fan, zero judgment, zero lectures). How did last night go? You can start right here in plain English — whether it was a quiet clear night, a glass of wine with dinner, or a round out with friends — and I'll tuck it onto yesterday's coaster. I handle **pics and more** too: bottle/can labels, bar receipts, tap lists, cocktail menus, multi-photo gallery uploads with EXIF timestamps, voice notes, fast shorthand (\`2x 16oz 7%\`), Share Sheet imports, and zero-proof swap ideas (\`1.0u\` = 12oz 5% beer / 5oz 12% wine / 1.5oz 40% spirit).`,
         ts: Date.now(),
       },
     ]);

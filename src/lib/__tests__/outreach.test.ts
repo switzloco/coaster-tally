@@ -1,5 +1,8 @@
 import crypto from 'crypto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { NextRequest } from 'next/server';
+import { ai } from '@/ai/genkit';
+import * as firebaseAdmin from '@/firebase/admin';
 import {
   DRINK_PRESETS,
   calculateStandardUnits,
@@ -39,10 +42,14 @@ import {
 } from '../outreach-discord';
 import {
   extractCleanReplyText,
+  inferReplyDayOffset,
   isExplicitStopKeyword,
+  parseOutreachMealText,
   resolveEntryConsumedAt,
 } from '@/ai/flows/outreach-meal-parser';
-import { isLikelyDuplicateOrRevisionMeal } from '../health-service-admin';
+import * as outreachService from '../outreach-service';
+import { GET as outreachActionGet } from '@/app/api/outreach/action/route';
+import { adminHealthService, isLikelyDuplicateOrRevisionMeal } from '../health-service-admin';
 import { deriveFirstNameFromEmail } from '../../../scripts/enroll-outreach';
 import type { FoodLogEntry } from '../food-exercise-types';
 
@@ -324,6 +331,20 @@ describe('Gmail +coaster@ isolation, "A New Journey" welcome email, MIME & CLI',
     expect(welcome.html).toContain('+1.0u Beer');
     expect(welcome.html).toContain('Clear Day 0.0u');
     expect(welcome.html).toContain('9:00 AM &amp; 7:00 PM (America/Los_Angeles)');
+    // Asks gently about last night & highlights pics + more + mobile-first 375px CSS
+    expect(welcome.html.toLowerCase()).toContain('how did last night go');
+    expect(welcome.html.toLowerCase()).toContain("yesterday&rsquo;s coaster");
+    expect(welcome.text.toLowerCase()).toContain('how did last night go');
+    expect(welcome.text.toLowerCase()).toContain("yesterday's coaster");
+    expect(welcome.html.toLowerCase()).toContain('pics');
+    expect(welcome.html.toLowerCase()).toContain('and more');
+    expect(welcome.html.toLowerCase()).toContain('exif');
+    expect(welcome.html.toLowerCase()).toContain('share sheet');
+    expect(welcome.text.toLowerCase()).toContain('pics');
+    expect(welcome.text.toLowerCase()).toContain('and more');
+    expect(welcome.html).toContain('max-width:560px;width:100%;box-sizing:border-box');
+    expect(welcome.html).toContain('min-height:44px');
+    expect(welcome.html).toContain('font-size:16px');
     expect(welcome.html).not.toMatch(FORBIDDEN_LEGACY_RE);
     expect(welcome.text).not.toMatch(FORBIDDEN_LEGACY_RE);
 
@@ -335,6 +356,9 @@ describe('Gmail +coaster@ isolation, "A New Journey" welcome email, MIME & CLI',
     expect(rendered.unsubscribeUrl).toContain('/api/outreach/action?token=');
     expect(rendered.html).toContain('Open Live Coaster &amp; Trends');
     expect(rendered.html).toContain('Clear Day 0.0u');
+    expect(rendered.html).toContain('max-width:560px;width:100%;box-sizing:border-box');
+    expect(rendered.html).toContain('min-height:44px');
+    expect(rendered.html).toContain('font-size:16px');
     expect(rendered.html).not.toMatch(FORBIDDEN_LEGACY_RE);
   });
 
@@ -483,5 +507,171 @@ describe('Gmail +coaster@ isolation, "A New Journey" welcome email, MIME & CLI',
     };
     const pourLater: FoodLogEntry = { ...pourA, consumedAt: '21:15' };
     expect(isLikelyDuplicateOrRevisionMeal(pourA, pourLater)).toBe(false);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('resolves "last night" and "yesterday" replies onto yesterday local dateKey and renders 375px-safe Live Coaster HTML', async () => {
+    expect(inferReplyDayOffset('Last night I had a glass of pinot noir')).toBe(-1);
+    expect(inferReplyDayOffset('Yesterday was a clear day')).toBe(-1);
+    expect(inferReplyDayOffset('2 hazy IPAs right now')).toBe(0);
+
+    // Even if LLM omits dayOffset (returns 0) and copies morning localTime, parser anchors onto yesterday
+    vi.spyOn(ai, 'generate').mockResolvedValueOnce({
+      output: {
+        isFoodLog: true,
+        isStopCommand: false,
+        name: 'Pinot Noir (5oz 12%)',
+        drinkCategory: 'wine',
+        volumeOz: 5,
+        abvPct: 12,
+        standardUnits: 1.0,
+        alcoholDrinks: 1.0,
+        portionG: 148,
+        calories: 0,
+        proteinG: 0,
+        carbsG: 0,
+        fatG: 0,
+        dayOffset: 0,
+        consumedAt: '09:05',
+        meal: 'dinner',
+        source: 'user_estimate',
+        agentReply: "Tucked that glass of pinot noir gently onto yesterday's coaster.",
+      },
+    } as never);
+
+    const parsed = await parseOutreachMealText({
+      uid: 'user_marlo',
+      rawText: 'Last night I had a glass of pinot noir',
+      localTime: '09:05',
+      localDate: '2026-11-13',
+      yesterdayDate: '2026-11-12',
+    });
+
+    expect(parsed.dayOffset).toBe(-1);
+    expect(parsed.date).toBe('2026-11-12');
+    expect(parsed.consumedAt).toBe('20:30');
+    expect(parsed.entries?.[0].dayOffset).toBe(-1);
+    expect(parsed.entries?.[0].date).toBe('2026-11-12');
+    expect(parsed.entries?.[0].consumedAt).toBe('20:30');
+
+    // End-to-end check on processOutreachFreeTextMeal timezone + yesterday dateKey write
+    const fakeDoc = {
+      get: vi.fn().mockResolvedValue({ exists: false, data: () => ({}) }),
+      set: vi.fn().mockResolvedValue(undefined),
+    };
+    const fakeCollection = {
+      add: vi.fn().mockResolvedValue({ id: 'log_yday_1' }),
+      where: vi.fn().mockReturnValue({
+        limit: vi.fn().mockReturnValue({
+          get: vi.fn().mockResolvedValue({ docs: [] }),
+        }),
+      }),
+    };
+    vi.spyOn(firebaseAdmin, 'getAdminFirestore').mockReturnValue({
+      doc: vi.fn().mockReturnValue(fakeDoc),
+      collection: vi.fn().mockReturnValue(fakeCollection),
+    } as never);
+
+    vi.spyOn(adminHealthService, 'getHealthSummary').mockResolvedValue({
+      id: 'user_marlo',
+      steps: 0,
+      hrv: 0,
+      sleepHours: 0,
+      recoveryStatus: 'high',
+      dailyProteinG: 0,
+      dailyCarbsG: 0,
+      dailyCaloriesIn: 0,
+      dailyCaloriesOut: 0,
+      visceralFatPoints: 0,
+      history: [],
+      isAnonymous: false,
+      onboardingDay: 1,
+      onboardingComplete: true,
+      isDeviceVerified: false,
+      entitlementTier: 'vip',
+    });
+    vi.spyOn(adminHealthService, 'getUserPreferences').mockResolvedValue({
+      weeklySchedule: '',
+      equipment: [],
+      targets: { proteinGoal: 0, fatPointsGoal: 0 },
+      profile: {
+        name: 'Marlo',
+        weightKg: 65,
+        heightCm: 168,
+        age: 34,
+        gender: 'female',
+        goal: 'mindful',
+        activityLevel: 'moderate',
+      },
+      foundingFriend: true,
+      outreach: {
+        enabled: true,
+        channel: 'email',
+        cadence: '2x',
+        email: 'miss.marlo@gmail.com',
+        timezone: 'America/Los_Angeles',
+        morningHour: 9,
+        nightHour: 19,
+      },
+    } as never);
+    vi.spyOn(adminHealthService, 'queryFoodLog').mockResolvedValue([]);
+    vi.spyOn(adminHealthService, 'queryLogRangeAll').mockResolvedValue([]);
+    vi.spyOn(adminHealthService, 'updateHealthData').mockResolvedValue(undefined);
+    const logFoodSpy = vi.spyOn(adminHealthService, 'logFood').mockResolvedValue('log_yday_pinot');
+
+    vi.spyOn(ai, 'generate').mockResolvedValueOnce({
+      output: {
+        isFoodLog: true,
+        isStopCommand: false,
+        name: 'Yesterday — Clear Day',
+        drinkCategory: 'clear_day',
+        isClearDay: true,
+        standardUnits: 0,
+        alcoholDrinks: 0,
+        portionG: 0,
+        calories: 0,
+        proteinG: 0,
+        carbsG: 0,
+        fatG: 0,
+        dayOffset: -1,
+        consumedAt: '20:30',
+        meal: 'dinner',
+        source: 'user_estimate',
+        agentReply: "Tucked yesterday's Clear Day cleanly onto your coaster.",
+      },
+    } as never);
+
+    // 2026-11-13T17:05:00Z = 09:05 AM America/Los_Angeles -> yesterday is 2026-11-12
+    const freeRes = await outreachService.processOutreachFreeTextMeal({
+      uid: 'user_marlo',
+      rawText: 'Yesterday was a clear day!',
+      now: new Date('2026-11-13T17:05:00Z'),
+    });
+
+    expect(freeRes.status).toBe('logged');
+    expect(freeRes.localDate).toBe('2026-11-12');
+    expect(freeRes.isClearDay).toBe(true);
+    expect(logFoodSpy).toHaveBeenCalledTimes(1);
+    expect(logFoodSpy.mock.calls[0][2]).toMatchObject({
+      date: '2026-11-12',
+      consumedAt: '20:30',
+      isClearDay: true,
+    });
+
+    // Zero-Login Live Coaster HTML route renders mobile-first 375px-safe layout
+    const ledgerToken = signOutreachToken({ uid: 'user_marlo', action: 'view_ledger' });
+    const req = new NextRequest(`https://coaster.example/api/outreach/action?t=${encodeURIComponent(ledgerToken)}`);
+    const resp = await outreachActionGet(req);
+    const html = await resp.text();
+    expect(resp.status).toBe(200);
+    expect(html).toContain('Live Coaster &amp; Trends');
+    expect(html).toContain('max-width:560px;width:100%;box-sizing:border-box');
+    expect(html).toContain('min-height:44px');
+    expect(html).toContain('font-size:16px');
+    expect(html).not.toContain('grid-template-columns:repeat(3,1fr)');
+    expect(html).not.toMatch(FORBIDDEN_LEGACY_RE);
   });
 });

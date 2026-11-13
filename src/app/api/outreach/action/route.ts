@@ -57,12 +57,12 @@ function renderConfirmationPage(params: {
     : '';
 
   const liveBtn = params.liveCoasterUrl
-    ? `<a href="${params.liveCoasterUrl}" style="display:inline-block;margin:6px;padding:10px 18px;border-radius:10px;background:#C26D2D;color:#FFFDF9;font-size:13px;font-weight:700;text-decoration:none;">Open Live Coaster &amp; Trends</a>`
+    ? `<a href="${params.liveCoasterUrl}" class="coaster-btn" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin:0;padding:11px 18px;border-radius:10px;background:#C26D2D;color:#FFFDF9;font-size:14px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;">Open Live Coaster &amp; Trends</a>`
     : '';
 
   const secondaryBtn =
     params.secondaryActionLabel && params.secondaryActionUrl
-      ? `<a href="${params.secondaryActionUrl}" style="display:inline-block;margin:6px;padding:10px 16px;border-radius:10px;border:1px solid #DED2C0;background:#F5EFE6;color:#1F1B18;font-size:13px;font-weight:700;text-decoration:none;">${escapeHtml(params.secondaryActionLabel)}</a>`
+      ? `<a href="${params.secondaryActionUrl}" class="coaster-btn" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin:0;padding:11px 16px;border-radius:10px;border:1px solid #DED2C0;background:#F5EFE6;color:#1F1B18;font-size:14px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;">${escapeHtml(params.secondaryActionLabel)}</a>`
       : '';
 
   return `<!DOCTYPE html>
@@ -71,19 +71,24 @@ function renderConfirmationPage(params: {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(params.title)} &mdash; Sunny &middot; Coaster</title>
+    <style>
+      *,*::before,*::after{box-sizing:border-box;}
+      html,body{margin:0;padding:0;width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%;}
+      .coaster-btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;box-sizing:border-box;}
+    </style>
   </head>
-  <body style="margin:0;padding:24px 16px;background:#FAF6F0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1F1B18;">
-    <div style="max-width:480px;margin:24px auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:18px;padding:28px 24px;text-align:center;box-shadow:0 8px 26px rgba(64,45,25,0.06);">
+  <body style="margin:0;padding:16px 12px;background:#FAF6F0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1F1B18;box-sizing:border-box;width:100%;">
+    <div style="max-width:560px;width:100%;box-sizing:border-box;margin:16px auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:18px;padding:24px 20px;text-align:center;box-shadow:0 8px 26px rgba(64,45,25,0.06);">
       <div style="font-size:11px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:${accent};margin-bottom:8px;">
         Sunny &middot; Coaster
       </div>
       <h1 style="font-size:22px;font-weight:800;margin:0 0 10px;font-family:Georgia,'Times New Roman',serif;">${escapeHtml(params.title)}</h1>
-      <p style="font-size:14px;color:#4A3F35;line-height:1.58;margin:0 0 16px;">${escapeHtml(params.detail)}</p>
+      <p style="font-size:16px;color:#4A3F35;line-height:1.6;margin:0 0 16px;">${escapeHtml(params.detail)}</p>
       ${noteCard}
-      <div style="margin-top:20px;">
+      <div style="margin-top:20px;display:flex;flex-wrap:wrap;justify-content:center;gap:8px;box-sizing:border-box;">
         ${liveBtn}
         ${secondaryBtn}
-        <a href="${getCoasterSiteUrl()}" style="display:inline-block;margin:6px;padding:10px 18px;border-radius:10px;background:#1F1B18;color:#FFFDF9;font-size:13px;font-weight:700;text-decoration:none;">Open Coaster App</a>
+        <a href="${getCoasterSiteUrl()}" class="coaster-btn" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin:0;padding:11px 18px;border-radius:10px;background:#1F1B18;color:#FFFDF9;font-size:14px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;">Open Coaster App</a>
       </div>
     </div>
   </body>
@@ -139,7 +144,7 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
   ];
 
   const clickNonce = crypto.randomBytes(4).toString('hex');
-  const quickButtonsHtml = quickButtonsSpec
+  const quickButtonsHtml = `<div class="coaster-actions" style="display:flex;flex-wrap:wrap;gap:8px;box-sizing:border-box;">${quickButtonsSpec
     .map((btn) => {
       const url = `${buildOutreachActionUrl({
         uid,
@@ -152,14 +157,14 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
       const bg = isPrimary ? '#C26D2D' : isClear ? '#F2F7F4' : '#F3ECE2';
       const fg = isPrimary ? '#FFFDF9' : isClear ? '#2E6445' : '#1F1B18';
       const border = isPrimary ? '#C26D2D' : isClear ? '#B7D4C3' : '#DED2C0';
-      return `<a href="${url}" style="display:inline-block;margin:4px 6px 4px 0;padding:10px 14px;border-radius:10px;background:${bg};color:${fg};border:1px solid ${border};font-size:13px;font-weight:700;text-decoration:none;">${escapeHtml(btn.label)}</a>`;
+      return `<a href="${url}" class="coaster-btn" style="display:inline-flex;align-items:center;justify-content:center;min-height:44px;margin:0;padding:11px 15px;border-radius:10px;background:${bg};color:${fg};border:1px solid ${border};font-size:14px;line-height:20px;font-weight:700;text-decoration:none;box-sizing:border-box;">${escapeHtml(btn.label)}</a>`;
     })
-    .join('');
+    .join('')}</div>`;
 
   const recentPours = [...recentLogs].slice(-10).reverse();
   const renderPourRows = (pours: CoasterFoodLogEntry[]) => {
     if (pours.length === 0) {
-      return `<div style="padding:14px;border-radius:12px;background:#FAF6F0;border:1px solid #E8DFD1;color:#6E6359;font-size:13px;">No pours logged yet &mdash; tap a button above or reply to Sunny anytime.</div>`;
+      return `<div style="padding:14px;border-radius:12px;background:#FAF6F0;border:1px solid #E8DFD1;color:#6E6359;font-size:16px;line-height:1.5;box-sizing:border-box;">No pours logged yet &mdash; tap a button above or reply to Sunny anytime.</div>`;
     }
     return pours
       .map((entry) => {
@@ -187,18 +192,18 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
             })}&from=coaster`
           : null;
 
-        return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #E8DFD1;border-radius:12px;margin-bottom:8px;background:#FFFDF9;">
-          <div style="min-width:0;flex:1;">
-            <div style="font-size:14px;font-weight:700;color:#1F1B18;">${escapeHtml(label)}</div>
-            <div style="font-size:12px;color:#6E6359;margin-top:3px;">
+        return `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:12px 14px;border:1px solid #E8DFD1;border-radius:12px;margin-bottom:8px;background:#FFFDF9;box-sizing:border-box;">
+          <div style="min-width:0;flex:1 1 180px;">
+            <div style="font-size:16px;font-weight:700;color:#1F1B18;overflow-wrap:anywhere;">${escapeHtml(label)}</div>
+            <div style="font-size:13px;color:#6E6359;margin-top:3px;">
               ${escapeHtml(dateIso)}${timeStr ? ` &middot; ${escapeHtml(timeStr)}` : ''}
               &nbsp;&middot;&nbsp;
-              <span style="display:inline-block;padding:1px 7px;border-radius:999px;background:${badgeBg};color:${badgeFg};font-weight:700;">${escapeHtml(badgeText)}</span>
+              <span style="display:inline-block;padding:2px 8px;border-radius:999px;background:${badgeBg};color:${badgeFg};font-weight:700;">${escapeHtml(badgeText)}</span>
             </div>
           </div>
           ${
             undoUrl
-              ? `<a href="${undoUrl}" style="flex-shrink:0;padding:6px 11px;border-radius:8px;border:1px solid #E5CFC8;background:#FDF4F2;color:#A13E2D;font-size:11px;font-weight:700;text-decoration:none;">Remove</a>`
+              ? `<a href="${undoUrl}" class="coaster-btn" style="flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 14px;border-radius:8px;border:1px solid #E5CFC8;background:#FDF4F2;color:#A13E2D;font-size:13px;font-weight:700;text-decoration:none;box-sizing:border-box;">Remove</a>`
               : ''
           }
         </div>`;
@@ -207,11 +212,11 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
   };
 
   const bannerHtml = bannerNotice
-    ? `<div style="background:#F2F7F4;border:1px solid #B7D4C3;color:#2E6445;padding:11px 14px;border-radius:12px;font-size:13px;font-weight:700;margin-bottom:16px;">${escapeHtml(bannerNotice)}</div>`
+    ? `<div style="background:#F2F7F4;border:1px solid #B7D4C3;color:#2E6445;padding:12px 14px;border-radius:12px;font-size:14px;font-weight:700;margin-bottom:16px;box-sizing:border-box;">${escapeHtml(bannerNotice)}</div>`
     : '';
 
   const swapHtml = composed.swapSuggestion
-    ? `<div style="margin-top:10px;padding:10px 12px;border-radius:10px;background:#FFFDF9;border:1px solid #E9C89B;font-size:12px;color:#4A3F35;">
+    ? `<div style="margin-top:10px;padding:11px 12px;border-radius:10px;background:#FFFDF9;border:1px solid #E9C89B;font-size:14px;line-height:1.5;color:#4A3F35;box-sizing:border-box;">
          <strong style="color:#9A4E1A;">Sunny's Zero-Proof Pick:</strong> ${escapeHtml(composed.swapSuggestion)}
        </div>`
     : '';
@@ -222,41 +227,54 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Live Coaster &amp; Trends &mdash; Sunny &middot; Coaster</title>
+    <style>
+      *,*::before,*::after{box-sizing:border-box;}
+      html,body{margin:0;padding:0;width:100%;overflow-x:hidden;-webkit-text-size-adjust:100%;}
+      .coaster-kpis{display:flex;flex-wrap:wrap;gap:10px;}
+      .coaster-kpi{flex:1 1 130px;min-width:0;}
+      .coaster-actions{display:flex;flex-wrap:wrap;gap:8px;}
+      .coaster-btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;box-sizing:border-box;}
+      @media (max-width:440px){
+        .coaster-body{padding:12px 8px !important;}
+        .coaster-card{padding:16px 14px !important;border-radius:16px !important;}
+        .coaster-kpi{flex:1 1 100%;}
+      }
+    </style>
   </head>
-  <body style="margin:0;padding:20px 12px;background:#FAF6F0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1F1B18;">
-    <div style="max-width:580px;margin:8px auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:20px;padding:22px 20px;box-shadow:0 8px 28px rgba(64,45,25,0.06);">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;">
-        <div>
+  <body class="coaster-body" style="margin:0;padding:16px 10px;background:#FAF6F0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1F1B18;box-sizing:border-box;width:100%;">
+    <div class="coaster-card" style="max-width:560px;width:100%;box-sizing:border-box;margin:6px auto;background:#FFFDF9;border:1px solid #E8DFD1;border-radius:20px;padding:20px 18px;box-shadow:0 8px 28px rgba(64,45,25,0.06);">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+        <div style="min-width:0;">
           <div style="font-size:11px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;color:#9A4E1A;">
             Sunny &middot; Coaster &mdash; Zero-Login Ledger
           </div>
-          <h1 style="margin:4px 0 0;font-size:21px;font-weight:800;font-family:Georgia,'Times New Roman',serif;color:#1F1B18;">Live Coaster &amp; Trends</h1>
+          <h1 style="margin:4px 0 0;font-size:22px;font-weight:800;font-family:Georgia,'Times New Roman',serif;color:#1F1B18;">Live Coaster &amp; Trends</h1>
         </div>
-        <div style="font-size:12px;font-weight:700;color:#6E6359;">${escapeHtml(localDate)}</div>
+        <div style="font-size:13px;font-weight:700;color:#6E6359;">${escapeHtml(localDate)}</div>
       </div>
 
       ${bannerHtml}
 
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;">
-        <div style="border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#FAF6F0;">
+      <div class="coaster-kpis" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px;box-sizing:border-box;">
+        <div class="coaster-kpi" style="flex:1 1 130px;min-width:0;border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#FAF6F0;box-sizing:border-box;">
           <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#6E6359;">Today's Units</div>
           <div style="font-size:22px;font-weight:800;color:#9A4E1A;margin-top:4px;">${formatUnits(trend.todayUnits)}</div>
-          <div style="font-size:11px;color:#6E6359;margin-top:2px;">1.0u = 0.6 fl oz ethanol</div>
+          <div style="font-size:12px;color:#6E6359;margin-top:2px;">1.0u = 0.6 fl oz ethanol</div>
         </div>
-        <div style="border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#FAF6F0;">
+        <div class="coaster-kpi" style="flex:1 1 130px;min-width:0;border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#FAF6F0;box-sizing:border-box;">
           <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#6E6359;">7-Day Average</div>
           <div style="font-size:22px;font-weight:800;color:#1F1B18;margin-top:4px;">${formatUnits(trend.sevenDayAvg)}<span style="font-size:12px;font-weight:600;color:#6E6359;">/day</span></div>
-          <div style="font-size:11px;color:#6E6359;margin-top:2px;">${formatUnits(trend.sevenDayTotal)} total (7d)</div>
+          <div style="font-size:12px;color:#6E6359;margin-top:2px;">${formatUnits(trend.sevenDayTotal)} total (7d)</div>
         </div>
-        <div style="border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#F2F7F4;">
+        <div class="coaster-kpi" style="flex:1 1 130px;min-width:0;border:1px solid #E8DFD1;border-radius:14px;padding:12px;background:#F2F7F4;box-sizing:border-box;">
           <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#2E6445;">30-Day Totals</div>
           <div style="font-size:22px;font-weight:800;color:#2E6445;margin-top:4px;">${trend.clearDaysLast30} <span style="font-size:12px;font-weight:700;">clear</span></div>
-          <div style="font-size:11px;color:#4A5D52;margin-top:2px;">${formatUnits(trend.thirtyDayTotal)} across 30d</div>
+          <div style="font-size:12px;color:#4A5D52;margin-top:2px;">${formatUnits(trend.thirtyDayTotal)} across 30d</div>
         </div>
       </div>
 
-      <div style="border:1px solid #E8DFD1;border-radius:14px;padding:14px 16px;background:#FAF6F0;margin-bottom:18px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div style="border:1px solid #E8DFD1;border-radius:14px;padding:14px 14px;background:#FAF6F0;margin-bottom:18px;box-sizing:border-box;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
           <div style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;color:#4A3F35;">7-Day Rolling Rhythm</div>
           <div style="font-size:12px;color:#6E6359;">Avg ${formatUnits(trend.sevenDayAvg)}/day</div>
         </div>
@@ -265,16 +283,16 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
         </div>
       </div>
 
-      <div style="background:#FDF5EB;border:1px solid #E9C89B;border-radius:14px;padding:14px 16px;margin-bottom:18px;">
+      <div style="background:#FDF5EB;border:1px solid #E9C89B;border-radius:14px;padding:14px 16px;margin-bottom:18px;box-sizing:border-box;">
         <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.07em;color:#9A4E1A;margin-bottom:4px;">Sunny's Note</div>
-        <div style="font-size:15px;font-weight:800;color:#1F1B18;margin-bottom:4px;">${escapeHtml(composed.headline)}</div>
-        <div style="font-size:13px;color:#4A3F35;line-height:1.55;">${escapeHtml(composed.body)}</div>
+        <div style="font-size:16px;font-weight:800;color:#1F1B18;margin-bottom:4px;">${escapeHtml(composed.headline)}</div>
+        <div style="font-size:16px;color:#4A3F35;line-height:1.55;">${escapeHtml(composed.body)}</div>
         ${swapHtml}
       </div>
 
       <div style="margin-bottom:20px;">
         <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.07em;color:#6E6359;margin-bottom:8px;">1-Tap Quick Log</div>
-        <div>${quickButtonsHtml}</div>
+        ${quickButtonsHtml}
       </div>
 
       <h2 style="font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:0.07em;color:#4A3F35;margin:16px 0 8px;">
@@ -282,9 +300,9 @@ async function renderLiveLedgerPage(uid: string, bannerNotice?: string): Promise
       </h2>
       ${renderPourRows(recentPours)}
 
-      <div style="margin-top:20px;padding-top:14px;border-top:1px solid #E8DFD1;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#6E6359;gap:10px;">
-        <span>Reply to your Sunny · Coaster email anytime with text or a photo</span>
-        <a href="${getCoasterSiteUrl()}" style="color:#9A4E1A;font-weight:800;text-decoration:none;white-space:nowrap;">Open Full App &rarr;</a>
+      <div style="margin-top:20px;padding-top:14px;border-top:1px solid #E8DFD1;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;font-size:13px;color:#6E6359;gap:10px;box-sizing:border-box;">
+        <span>Reply to your Sunny · Coaster email anytime with text or a pic</span>
+        <a href="${getCoasterSiteUrl()}" class="coaster-btn" style="min-height:44px;padding:8px 14px;border-radius:8px;background:#F3ECE2;border:1px solid #DED2C0;color:#9A4E1A;font-weight:800;text-decoration:none;box-sizing:border-box;">Open Full App &rarr;</a>
       </div>
     </div>
   </body>
