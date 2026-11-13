@@ -10,6 +10,7 @@ import {
 } from 'firebase/remote-config';
 
 export type CfoPersonaStrictness = 'ruthless_wall_street' | 'balanced_advisor';
+export type BuddyPersonaKey = 'sunny_booth_buddy' | 'minimal_counter';
 export type HybridDefaultModeKey =
   | 'PREFER_ON_DEVICE'
   | 'ONLY_ON_DEVICE'
@@ -19,16 +20,21 @@ export type HybridDefaultModeKey =
 export interface CfoRemoteConfigValues {
   cfoCloudModel: string;
   cfoPersonaStrictness: CfoPersonaStrictness;
+  buddyPersona?: BuddyPersonaKey;
   hybridDefaultMode: HybridDefaultModeKey;
   source: 'default' | 'remote' | 'static';
   lastSyncedAt: number | null;
 }
 
-export const CFO_REMOTE_CONFIG_DEFAULTS = {
+export const COASTER_REMOTE_CONFIG_DEFAULTS = {
   cfo_cloud_model: 'gemini-3.8-flash',
-  cfo_persona_strictness: 'ruthless_wall_street',
+  coaster_cloud_model: 'gemini-3.8-flash',
+  cfo_persona_strictness: 'balanced_advisor',
+  buddy_persona: 'sunny_booth_buddy',
   hybrid_default_mode: 'PREFER_ON_DEVICE',
 } as const;
+
+export const CFO_REMOTE_CONFIG_DEFAULTS = COASTER_REMOTE_CONFIG_DEFAULTS;
 
 let rcInstance: RemoteConfig | null = null;
 let lastSyncedAtMs: number | null = null;
@@ -166,4 +172,33 @@ export async function syncCfoRemoteConfig(
   })();
 
   return syncPromise;
+}
+
+export interface CoasterRemoteConfigValues extends CfoRemoteConfigValues {
+  coasterCloudModel: string;
+  buddyPersona: BuddyPersonaKey;
+}
+
+export function getCoasterRemoteConfigSnapshot(
+  firebaseApp: FirebaseApp | null | undefined,
+): CoasterRemoteConfigValues {
+  const base = getCfoRemoteConfigSnapshot(firebaseApp);
+  return {
+    ...base,
+    coasterCloudModel: sanitizeCloudModelName(base.cfoCloudModel),
+    buddyPersona: base.buddyPersona ?? 'sunny_booth_buddy',
+  };
+}
+
+export async function syncCoasterRemoteConfig(
+  firebaseApp: FirebaseApp | null | undefined,
+): Promise<CoasterRemoteConfigValues> {
+  const base = firebaseApp
+    ? await syncCfoRemoteConfig(firebaseApp)
+    : getCfoRemoteConfigSnapshot(null);
+  return {
+    ...base,
+    coasterCloudModel: sanitizeCloudModelName(base.cfoCloudModel),
+    buddyPersona: base.buddyPersona ?? 'sunny_booth_buddy',
+  };
 }

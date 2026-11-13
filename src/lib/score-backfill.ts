@@ -1,123 +1,153 @@
 /**
- * @fileOverview Pure helpers for backfilling the daily VF score history.
- *
- * Given a window of days plus the logs / device data for each, compute the VF
- * score for every day that has activity and merge it into the existing history —
- * idempotently (a date already present is replaced, never duplicated) — then
- * rebuild cumulative equity chronologically. No Firestore I/O lives here so it
- * is unit-testable; the orchestration in score-history-sync.ts wires the data.
+ * Pure NIAAA Standard Drink Unit backfill computation.
+ * Aggregates daily drink logs in `windowDates` into chronological `HistoryEntry`
+ * records with running cumulative units, clear-day counts, and zero-proof swaps.
  */
 
-import { calculateDailyVFScore } from './vf-scoring';
-import { estimateBmrKcal } from './metabolic-engine';
-import type { FoodLogEntry, ExerciseLogEntry } from './food-exercise-types';
-import type { HistoryEntry, VFBreakdown } from './health-service';
+import { formatUnits, summarizeDayLogs } from './drink-units';
+import type { ExerciseLogEntry, FoodLogEntry } from './food-exercise-types';
+import type { HistoryEntry } from './health-service';
 
-/** Sex-averaged Mifflin–St Jeor resting metabolic rate (kcal/day). */
+/** Compatibility helper retained for unowned callers; unused by Coaster drink unit math. */
 export function estimateBMR(weightKg = 80, heightCm = 175, age = 40): number {
-  return estimateBmrKcal(weightKg, heightCm, age);
+  return Math.round(10 * weightKg + 6.25 * heightCm - 5 * age + 5);
 }
 
-/** Estimate total daily burn for a day with no device data: RMR × light-activity + logged exercise. */
-export function estimateCaloriesOut(exerciseCal: number, weightKg?: number, heightCm?: number, age?: number): number {
-  return Math.round(estimateBMR(weightKg, heightCm, age) * 1.2) + Math.round(exerciseCal);
+/** Compatibility helper retained for unowned callers; unused by Coaster drink unit math. */
+export function estimateCaloriesOut(
+  exerciseCal: number,
+  weightKg?: number,
+  heightCm?: number,
+  age?: number,
+): number {
+  const bmr = estimateBMR(weightKg ?? 80, heightCm ?? 175, age ?? 40);
+  return Math.round(bmr * 1.2 + exerciseCal);
 }
 
 export interface DayLogs {
   food: FoodLogEntry[];
-  exercise: ExerciseLogEntry[];
+  exercise?: ExerciseLogEntry[];
 }
 
 export interface BuildScoreHistoryInput {
-  windowDates: string[];                                  // YYYY-MM-DD ascending — the days to (re)score
-  logsByDate: Record<string, DayLogs>;                    // must also include the day BEFORE windowDates[0]
-  fitbitCaloriesOutByDate: Record<string, number | undefined>;
+  /** YYYY-MM-DD ascending dates to rebuild. */
+  windowDates: string[];
+  logsByDate: Record<string, DayLogs>;
+  existingHistory: HistoryEntry[];
+  /** Optional legacy inputs accepted safely and ignored by pure drink unit math. */
+  fitbitCaloriesOutByDate?: Record<string, number | undefined>;
   weightKg?: number;
   bodyFatPct?: number;
   heightCm?: number;
   age?: number;
-  proteinGoal: number;
-  existingHistory: HistoryEntry[];
+  proteinGoal?: number;
 }
 
 export interface BuildScoreHistoryResult {
   history: HistoryEntry[];
-  visceralFatPoints: number;
+  totalUnits: number;
+  clearDays: number;
+  zeroProofSwaps: number;
   scoredDays: number;
+  /** Compatibility alias equal to cumulative `totalUnits`. */
+  visceralFatPoints: number;
 }
 
-function prevDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() - 1);
-  return dt.toISOString().slice(0, 10);
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function buildDayDetail(params: {
+  totalUnits: number;
+  drinkCount: number;
+  zeroProofCount: number;
+  isClearDay: boolean;
+}): string {
+  const { totalUnits, drinkCount, zeroProofCount, isClearDay } = params;
+  if (isClearDay && totalUnits === 0 && zeroProofCount === 0) {
+    return 'Clear Day (0.0u)';
+  }
+  const parts = [formatUnits(totalUnits)];
+  if (drinkCount > 0) {
+    parts.push(`${drinkCount} pour${drinkCount === 1 ? '' : 's'}`);
+  }
+  if (zeroProofCount > 0) {
+    parts.push(`${zeroProofCount} zero-proof`);
+  }
+  if (isClearDay) {
+    parts.push('Clear Day');
+  }
+  return parts.join(' · ');
 }
 
 export function buildScoreHistory(input: BuildScoreHistoryInput): BuildScoreHistoryResult {
-  // Index existing entries; preserve any without an isoDate under a unique key so
-  // they are never merged away.
   const byKey = new Map<string, HistoryEntry>();
   input.existingHistory.forEach((h, i) => byKey.set(h.isoDate || `__noiso_${i}`, h));
 
   let scoredDays = 0;
+
   for (const date of input.windowDates) {
-    const day = input.logsByDate[date];
-    const food = day?.food ?? [];
-    const exercise = day?.exercise ?? [];
-    if (food.length === 0 && exercise.length === 0) continue; // nothing logged — leave the day unscored
-    scoredDays++;
+    const food = (input.logsByDate[date]?.food ?? []).filter((entry) => !entry.ignored);
+    if (food.length === 0) continue;
 
-    const caloriesIn = food.reduce((s, e) => s + (e.calories || 0), 0);
-    const proteinG = food.reduce((s, e) => s + (e.proteinG || 0), 0);
-    const alcoholDrinks = food.reduce((s, e) => s + (e.alcoholDrinks || 0), 0);
-    const seedOilMeals = food.filter((e) => e.hasSeedOils === true).length;
-    const exerciseCal = exercise.reduce((s, e) => s + (e.adjustedCalories ?? e.estimatedCaloriesBurned ?? 0), 0);
-
-    const deviceOut = input.fitbitCaloriesOutByDate[date];
-    const estimated = deviceOut == null;
-    const caloriesOut = estimated
-      ? estimateCaloriesOut(exerciseCal, input.weightKg, input.heightCm, input.age)
-      : deviceOut!;
-
-    const prevFood = input.logsByDate[prevDate(date)]?.food ?? [];
-    const alcoholYesterday = prevFood.some((e) => (e.alcoholDrinks || 0) > 0);
-
-    const result = calculateDailyVFScore({
-      caloriesIn, caloriesOut, proteinG, proteinGoal: input.proteinGoal,
-      fastingHours: 0, alcoholDrinks, sleepHours: 7, seedOilMeals,
-      weightKg: input.weightKg, bodyFatPct: input.bodyFatPct,
-      heightCm: input.heightCm, age: input.age,
-      foodLogs: food, prevFoodLogs: prevFood, exerciseLogs: exercise, alcoholYesterday,
+    scoredDays += 1;
+    const summary = summarizeDayLogs(food, date);
+    const [y, m, d] = date.split('-').map(Number);
+    const displayDate = new Date(y, m - 1, d).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
     });
 
-    const [y, m, d] = date.split('-').map(Number);
-    const displayDate = new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    const breakdown: VFBreakdown = {
-      caloriesIn, caloriesOut, proteinG, proteinGoal: input.proteinGoal,
-      sleepHours: 7, alcoholYesterday, caloriesOutEstimated: estimated,
-      ...result.breakdown,
-    };
-
     const existing = byKey.get(date);
+    const status: HistoryEntry['status'] =
+      summary.isClearDay || summary.totalUnits === 0
+        ? 'Bullish'
+        : summary.totalUnits <= 2.0
+          ? 'Stable'
+          : 'Correction';
+
     byKey.set(date, {
       ...(existing ?? {}),
       date: displayDate,
       isoDate: date,
-      gain: result.score,
-      status: result.score >= 0 ? 'Bullish' : 'Correction',
-      detail: result.summary,
-      equity: 0, // recomputed below
-      breakdown,
+      gain: summary.totalUnits,
+      status,
+      detail: buildDayDetail(summary),
+      equity: 0,
+      scoringVersion: 'coaster-niaaa-v1',
     });
   }
 
-  // Rebuild chronological history with cumulative equity (running sum of gains).
-  const ordered = Array.from(byKey.values()).sort((a, b) => (a.isoDate || '').localeCompare(b.isoDate || ''));
-  let running = 0;
-  for (const h of ordered) {
-    running += h.gain || 0;
-    h.equity = running;
+  const ordered = Array.from(byKey.values()).sort((a, b) =>
+    (a.isoDate || '').localeCompare(b.isoDate || ''),
+  );
+
+  let runningUnits = 0;
+  let clearDays = 0;
+  let zeroProofSwaps = 0;
+
+  for (const entry of ordered) {
+    runningUnits = round1(runningUnits + (entry.gain || 0));
+    entry.equity = runningUnits;
+
+    const dayLogs = entry.isoDate
+      ? (input.logsByDate[entry.isoDate]?.food ?? []).filter((f) => !f.ignored)
+      : [];
+    if (dayLogs.length > 0 && entry.isoDate) {
+      const sum = summarizeDayLogs(dayLogs, entry.isoDate);
+      if (sum.isClearDay) clearDays += 1;
+      zeroProofSwaps += sum.zeroProofCount;
+    } else if (entry.isoDate && (entry.gain || 0) === 0 && /clear day/i.test(entry.detail || '')) {
+      clearDays += 1;
+    }
   }
 
-  return { history: ordered, visceralFatPoints: running, scoredDays };
+  return {
+    history: ordered,
+    totalUnits: runningUnits,
+    clearDays,
+    zeroProofSwaps,
+    scoredDays,
+    visceralFatPoints: runningUnits,
+  };
 }

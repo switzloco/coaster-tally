@@ -574,3 +574,32 @@ export function reconcileParsedWorkout(
     cfoClass: 'CAPITAL_CAPEX',
   };
 }
+
+// ── Coaster Drink Reconciliation Bridge ─────────────────────────────────────
+// Re-exports the NIAAA Standard Drink Unit offline reconciler so any untouched
+// module importing `@/lib/usda-local-reconciler` can smoothly consume Coaster
+// beverage reconciliation alongside legacy types.
+export {
+  DRINK_DATABASE,
+  reconcileDrinkDescription,
+  reconcileDrinkItems,
+  type DrinkDatabaseProfile,
+  type RawDrinkCandidateInput,
+  type ReconciledDrink,
+} from './drink-reconciler';
+
+export {
+  DRINK_PRESETS,
+  PURE_ALCOHOL_OZ_PER_STANDARD_DRINK,
+  GRAMS_PER_STANDARD_DRINK,
+  ML_PER_FL_OZ,
+  calculateStandardUnits,
+  mlToOz,
+  standardUnitsToGrams,
+  formatUnits,
+  getEntryUnits,
+  isClearDayEntry,
+  isZeroProofEntry,
+  type DrinkCategory,
+  type DrinkPreset,
+} from './drink-units';

@@ -42,7 +42,7 @@ function isServerFounderIdentity(auth: VerifiedAuthToken): boolean {
  * Only these codes grant VIP status.
  */
 export function getValidFounderCodes(): Set<string> {
-  const defaults = ['SWITZER', 'NICKVIP'];
+  const defaults = ['SWITZER', 'NICKVIP', 'MARLO', 'COASTER'];
   const fromEnv = (process.env.CFO_FOUNDER_CODES || '')
     .split(',')
     .map((s) => s.trim().toUpperCase())
@@ -107,7 +107,7 @@ export async function checkServerEntitlement(
       allowed: true,
       canUseAiCoach: true,
       tier: 'founder',
-      badgeLabel: 'Founder Immunity',
+      badgeLabel: 'Founder & Founding Friend',
       isExempt: true,
       aiAuditsUsed: 0,
       freeLimit: FREE_AI_AUDITS_LIMIT,
@@ -137,7 +137,7 @@ export async function checkServerEntitlement(
       allowed: true,
       canUseAiCoach: true,
       tier: 'founder',
-      badgeLabel: 'Founder Immunity',
+      badgeLabel: 'Founder & Founding Friend',
       isExempt: true,
       aiAuditsUsed: data.aiAuditsUsed ?? 0,
       freeLimit: FREE_AI_AUDITS_LIMIT,
@@ -158,7 +158,7 @@ export async function checkServerEntitlement(
       allowed: true,
       canUseAiCoach: true,
       tier: 'founder',
-      badgeLabel: 'Founder Immunity',
+      badgeLabel: 'Founder & Founding Friend',
       isExempt: true,
       aiAuditsUsed: used,
       freeLimit: FREE_AI_AUDITS_LIMIT,
@@ -183,7 +183,7 @@ export async function checkServerEntitlement(
       allowed,
       canUseAiCoach: allowed,
       tier,
-      badgeLabel: tier === 'vip' ? 'Founding Partner' : 'Executive Retainer',
+      badgeLabel: tier === 'vip' ? 'Coaster VIP' : 'Coaster Supporter',
       isExempt: true,
       aiAuditsUsed: used,
       freeLimit: PRO_MONTHLY_AI_AUDITS_CAP,
@@ -209,7 +209,7 @@ export async function checkServerEntitlement(
     allowed,
     canUseAiCoach: allowed,
     tier: 'free',
-    badgeLabel: bonus > 0 ? `Partner Credit Pack (${remaining} left)` : 'Open Terminal',
+    badgeLabel: bonus > 0 ? `Coaster Guest Pass (${remaining} left)` : 'Coaster Open Access',
     isExempt: false,
     aiAuditsUsed: used,
     freeLimit: effectiveLimit,

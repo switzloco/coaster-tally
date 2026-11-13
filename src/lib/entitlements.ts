@@ -20,25 +20,28 @@
 
 export type EntitlementTier = 'founder' | 'vip' | 'pro' | 'free';
 
-/** Free AI turn allowance for signed-in users before the AI Coach paywall appears (~$0.03 CAC). */
-export const FREE_AI_AUDITS_LIMIT = 10;
+/** Generous Coaster AI allowance (judges, Marlo, and everyday logs never hit paywalls). */
+export const FREE_AI_CALL_LIMIT = 10000;
 
-/** Cap for unsigned-in anonymous guests to prevent incognito token farming (~$0.009 max). */
-export const ANONYMOUS_FREE_AI_AUDITS_LIMIT = 3;
+/** Free AI turn allowance for signed-in users. */
+export const FREE_AI_AUDITS_LIMIT = FREE_AI_CALL_LIMIT;
 
-/** One-time bonus AI audits granted when redeeming a Friends & Family credit code/link (~$0.05 total cost). */
+/** Generous allowance for unsigned-in guests trying Coaster. */
+export const ANONYMOUS_FREE_AI_AUDITS_LIMIT = FREE_AI_CALL_LIMIT;
+
+/** One-time bonus AI audits granted when redeeming a Friends & Family credit code/link. */
 export const FRIENDS_BONUS_AI_AUDITS = 25;
 
-/** Daily threshold after which turns auto-downshift to gemini-2.5-flash-lite (4x cheaper). */
-export const DAILY_HIGH_SPEED_TURNS = 12;
+/** Daily high-speed turn threshold. */
+export const DAILY_HIGH_SPEED_TURNS = 10000;
 
-/** Monthly high-speed turns on gemini-2.5-flash before auto-downshifting to flash-lite. */
-export const PRO_MONTHLY_HIGH_SPEED_TURNS = 300;
+/** Monthly high-speed turns on gemini-3.8-flash / 2.5-flash before flash-lite. */
+export const PRO_MONTHLY_HIGH_SPEED_TURNS = 10000;
 
-/** Hard 30-day fair-use ceiling for Pro/VIP accounts to guarantee >=82% net margin on Annual plans. */
-export const PRO_MONTHLY_AI_AUDITS_CAP = 450;
+/** Monthly fair-use ceiling for Pro/VIP accounts. */
+export const PRO_MONTHLY_AI_AUDITS_CAP = 10000;
 
-/** Pricing constants for the Executive Retainer. */
+/** Pricing constants (retained for legacy route compatibility; paywall stays disengaged). */
 export const CFO_PRICING = {
   monthlyPriceUsd: 12.99,
   annualPriceUsd: 79.99,
@@ -46,10 +49,11 @@ export const CFO_PRICING = {
   foundingPartnerLifetimeUsd: 199,
 } as const;
 
+export const COASTER_PRICING = CFO_PRICING;
+
 /**
- * Permanent founder email allowlist (case-insensitive).
- * Nick's primary accounts are hardcoded so the paywall never applies to him,
- * even in local dev or before Firestore preferences finish loading.
+ * Permanent founder & founding friend email allowlist (case-insensitive).
+ * Guarantees zero lockouts and zero Stripe friction.
  */
 export const FOUNDER_EMAILS: ReadonlySet<string> = new Set([
   'nicholas.switzer@gmail.com',
@@ -57,6 +61,7 @@ export const FOUNDER_EMAILS: ReadonlySet<string> = new Set([
   'nickswitzer1@substack.com',
   'nick@cfofitness.app',
   'nick@thecfo.app',
+  'miss.marlo@gmail.com',
 ]);
 
 /**
@@ -116,7 +121,7 @@ export function resolveClientEntitlement(
       allowed: true,
       canUseAiCoach: true,
       tier: 'founder',
-      badgeLabel: 'Founder Immunity',
+      badgeLabel: 'Founder & Founding Friend',
       isExempt: true,
       aiAuditsUsed: healthData?.aiAuditsUsed ?? 0,
       freeLimit: FREE_AI_AUDITS_LIMIT,
@@ -138,7 +143,7 @@ export function resolveClientEntitlement(
       allowed: withinMonthlyCap,
       canUseAiCoach: withinMonthlyCap,
       tier: storedTier,
-      badgeLabel: storedTier === 'vip' ? 'Founding Partner' : 'Executive Retainer',
+      badgeLabel: storedTier === 'vip' ? 'Coaster VIP' : 'Coaster Supporter',
       isExempt: true,
       aiAuditsUsed: healthData?.aiAuditsUsed ?? 0,
       freeLimit: PRO_MONTHLY_AI_AUDITS_CAP,
@@ -159,7 +164,7 @@ export function resolveClientEntitlement(
     allowed,
     canUseAiCoach: allowed,
     tier: 'free',
-    badgeLabel: bonus > 0 ? `Partner Credit Pack (${remaining} left)` : 'Open Terminal',
+    badgeLabel: bonus > 0 ? `Coaster Guest Pass (${remaining} left)` : 'Coaster Open Access',
     isExempt: false,
     aiAuditsUsed: used,
     freeLimit: effectiveLimit,
