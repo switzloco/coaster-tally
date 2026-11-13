@@ -1,321 +1,303 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
+  ResponsiveContainer,
   ComposedChart,
   Bar,
   Line,
+  Cell,
   XAxis,
   YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-  ReferenceLine,
   CartesianGrid,
+  Tooltip,
 } from 'recharts';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { BarChart3, Trophy } from 'lucide-react';
-import type { HistoryEntry } from '@/lib/health-service';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { HistoryEntry } from '@/lib/health-service';
+import { FoodLogEntry } from '@/lib/food-exercise-types';
 import {
-  computeDailyLevelPointsMap,
-  computeLevelProgress,
-  DEFAULT_ACTIVE_LEVEL,
-  DEFAULT_LEVEL_HISTORY,
-  type LevelConfig,
-} from '@/lib/level-tracker';
+  computeDailyTrendSeries,
+  computeTrendSummary,
+  formatUnits,
+} from '@/lib/drink-units';
+import { useUser, useFirestore, useCollection, useMemoFirebase } from '@/firebase';
+import { collection, query, where } from 'firebase/firestore';
+import { TrendingDown, TrendingUp } from 'lucide-react';
 
-interface VFScoreChartProps {
-  history: HistoryEntry[];
+type DailyPoint = ReturnType<typeof computeDailyTrendSeries>[number];
+
+export interface VfScoreChartProps {
+  history?: HistoryEntry[];
   onDayClick?: (entry: HistoryEntry) => void;
-  activeLevel?: LevelConfig;
-  levelHistory?: LevelConfig[];
+  logs?: FoodLogEntry[];
+  anchorDateKey?: string;
+  activeLevel?: unknown;
+  levelHistory?: unknown;
 }
 
-export function VFScoreChart({
-  history,
+function getLocalDateKeyOffset(daysAgo = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export function VfScoreChart({
   onDayClick,
-  activeLevel = DEFAULT_ACTIVE_LEVEL,
-  levelHistory = DEFAULT_LEVEL_HISTORY,
-}: VFScoreChartProps) {
-  const [scope, setScope] = useState<'level' | 'all'>('level');
-  const [lineMetric, setLineMetric] = useState<'levelPoints' | 'equity'>('levelPoints');
+  logs: propLogs,
+  anchorDateKey,
+}: VfScoreChartProps) {
+  const { user } = useUser();
+  const db = useFirestore();
+  const [rangeDays, setRangeDays] = useState<14 | 30 | 90>(30);
 
-  const levelPointsMap = useMemo(
-    () => computeDailyLevelPointsMap(history, activeLevel, levelHistory),
-    [history, activeLevel, levelHistory]
+  const anchor = anchorDateKey || getLocalDateKeyOffset(0);
+  const cutoff90 = useMemo(() => getLocalDateKeyOffset(95), []);
+
+  const logsQuery = useMemoFirebase(() => {
+    if (propLogs || !user || !db) return null;
+    return query(
+      collection(db, 'users', user.uid, 'food_log'),
+      where('date', '>=', cutoff90)
+    );
+  }, [propLogs, user, db, cutoff90]);
+
+  const { data: queriedLogs, isLoading } = useCollection<FoodLogEntry>(logsQuery);
+
+  const activeLogs = useMemo(
+    () => (propLogs ?? queriedLogs ?? []).filter((entry) => !entry.ignored),
+    [propLogs, queriedLogs]
   );
 
-  const levelProgress = useMemo(
-    () => computeLevelProgress(activeLevel, history),
-    [activeLevel, history]
+  const series = useMemo(
+    () => computeDailyTrendSeries(activeLogs, rangeDays, anchor),
+    [activeLogs, rangeDays, anchor]
   );
 
-  // Dedupe by date (keep last entry per date for daily score) and build chart data
-  const allChartData = useMemo(() => {
-    const byDate = new Map<string, HistoryEntry>();
-    for (const entry of history) {
-      if (entry.detail === 'Account Created') continue;
-      const key = entry.isoDate || entry.date;
-      byDate.set(key, entry);
-    }
+  const summary = useMemo(
+    () => computeTrendSummary(activeLogs, anchor),
+    [activeLogs, anchor]
+  );
 
-    return Array.from(byDate.values()).map((entry) => {
-      const isoKey = entry.isoDate || entry.date;
-      const lvlInfo = levelPointsMap.get(isoKey);
-      return {
-        date: entry.date,
-        isoDate: isoKey,
-        score: entry.gain,
-        equity: entry.equity,
-        levelPoints: lvlInfo?.levelPoints ?? entry.gain,
-        levelName: lvlInfo?.levelName ?? activeLevel.name,
-        shortLabel: lvlInfo?.shortLabel ?? 'L3',
-        targetPoints: lvlInfo?.targetPoints ?? activeLevel.targetPoints,
-        isInActiveLevel: lvlInfo?.isInActiveLevel ?? false,
-        _entry: entry,
-      };
+  const handlePointClick = (point: DailyPoint) => {
+    if (!onDayClick) return;
+    const detail = point.isClearDay
+      ? 'Clear Day (0.0u)'
+      : `${formatUnits(point.units)} • ${point.drinkCount} ${point.drinkCount === 1 ? 'pour' : 'pours'}`;
+    onDayClick({
+      isoDate: point.dateKey,
+      date: point.label,
+      gain: 0,
+      status: 'Stable',
+      detail,
+      equity: point.units,
     });
-  }, [history, levelPointsMap, activeLevel]);
-
-  const activeLevelData = useMemo(
-    () => allChartData.filter((d) => d.isInActiveLevel),
-    [allChartData]
-  );
-
-  const chartData =
-    scope === 'level' && activeLevelData.length > 0 ? activeLevelData : allChartData;
-
-  if (allChartData.length === 0) return null;
-
-  const activeLineKey = lineMetric === 'levelPoints' ? 'levelPoints' : 'equity';
-  const activeLineColor = lineMetric === 'levelPoints' ? '#10b981' : '#ef4444';
+  };
 
   return (
-    <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-      <CardHeader className="p-5 sm:p-6 pb-2 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="text-[12px] font-black uppercase text-muted-foreground tracking-widest flex items-center gap-2.5">
-            <BarChart3 className="w-4 h-4" />
-            Daily VF Score & Level Tracking Trajectory
-          </CardTitle>
+    <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+      <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <CardTitle className="text-base sm:text-lg font-bold text-[#1F1B18]">
+              Daily Units &amp; 7-Day Average
+            </CardTitle>
+            <CardDescription className="text-xs text-[#6E6359] mt-0.5">
+              Tap any bar to open that day&apos;s coaster breakdown. Rolling line smooths out single nights.
+            </CardDescription>
+          </div>
 
-          <div className="flex flex-wrap items-center gap-1.5">
-            {/* Scope Toggle: Active Level vs All History */}
-            <div className="inline-flex rounded-lg bg-slate-100 p-0.5 border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setScope('level')}
-                className={`px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider transition-all ${
-                  scope === 'level'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {activeLevel.name} ({activeLevelData.length}d)
-              </button>
-              <button
-                type="button"
-                onClick={() => setScope('all')}
-                className={`px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider transition-all ${
-                  scope === 'all'
-                    ? 'bg-slate-900 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                All History ({allChartData.length}d)
-              </button>
-            </div>
-
-            {/* Cumulative Line Toggle: Level Points vs All-Time Equity */}
-            <div className="inline-flex rounded-lg bg-slate-100 p-0.5 border border-slate-200">
-              <button
-                type="button"
-                onClick={() => setLineMetric('levelPoints')}
-                className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider transition-all ${
-                  lineMetric === 'levelPoints'
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Level Pts Line
-              </button>
-              <button
-                type="button"
-                onClick={() => setLineMetric('equity')}
-                className={`px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider transition-all ${
-                  lineMetric === 'equity'
-                    ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                All-Time Cumu
-              </button>
-            </div>
+          <div className="inline-flex rounded-full bg-[#FAF6F0] border border-[#E8DFD1] p-1 self-start">
+            {([14, 30, 90] as const).map((days) => {
+              const active = rangeDays === days;
+              return (
+                <button
+                  key={days}
+                  type="button"
+                  onClick={() => setRangeDays(days)}
+                  className={`px-3 py-1 rounded-full text-xs font-bold transition-colors ${
+                    active
+                      ? 'bg-[#1F1B18] text-[#FAF6F0]'
+                      : 'text-[#6E6359] hover:text-[#1F1B18]'
+                  }`}
+                >
+                  {days}D
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Active Level Sprint Progress Bar inside the Ledger Chart */}
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-900 text-white px-3.5 py-2.5 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <Trophy className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span className="font-black uppercase tracking-wider text-emerald-400">
-              {activeLevel.name}
-            </span>
-            <span className="text-slate-300 font-semibold">
-              (Started {activeLevel.startDate}
-              {activeLevel.targetDate ? ` → Goal ${activeLevel.targetDate}` : ''})
-            </span>
+        <div className="grid grid-cols-3 gap-2.5 pt-3">
+          <div className="rounded-xl bg-[#FAF6F0] border border-[#E8DFD1] px-3 py-2">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
+              7-Day Avg
+            </p>
+            <p className="text-base font-black text-[#1F1B18] tabular-nums">
+              {formatUnits(summary.sevenDayAvg)}
+              <span className="text-[11px] font-medium text-[#6E6359] ml-0.5">/day</span>
+            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3 font-bold">
-            <span>
-              Level Total:{' '}
-              <strong className="text-emerald-400 font-black">
-                {levelProgress.totalPoints > 0 ? `+${levelProgress.totalPoints}` : levelProgress.totalPoints}
-              </strong>{' '}
-              / {levelProgress.targetPoints} pts ({levelProgress.progressPct}%)
-            </span>
-            <span className="text-amber-300">
-              {levelProgress.pointsToTarget > 0
-                ? `${levelProgress.pointsToTarget} pts to go`
-                : 'Target Met ✓'}
-            </span>
-            <span className="text-slate-300">
-              Pace: {levelProgress.pointsPerDay}/d (7d: {levelProgress.rolling7dPointsPerDay}/d)
-              {levelProgress.requiredPointsPerDay !== null
-                ? ` · Req: ${levelProgress.requiredPointsPerDay}/d`
-                : ''}
-            </span>
+
+          <div className="rounded-xl bg-[#FAF6F0] border border-[#E8DFD1] px-3 py-2">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
+              30-Day Total
+            </p>
+            <p className="text-base font-black text-[#C26D2D] tabular-nums">
+              {formatUnits(summary.thirtyDayTotal)}
+            </p>
+          </div>
+
+          <div className="rounded-xl bg-[#FAF6F0] border border-[#E8DFD1] px-3 py-2">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
+              Vs Prior 7d
+            </p>
+            <p className="text-base font-black tabular-nums flex items-center gap-1 text-[#1F1B18]">
+              {summary.rollingVsPriorPct === null ? (
+                <span className="text-[#6E6359] text-sm font-semibold">—</span>
+              ) : (
+                <>
+                  {summary.rollingVsPriorPct <= 0 ? (
+                    <TrendingDown className="w-3.5 h-3.5 text-[#3F7D58]" />
+                  ) : (
+                    <TrendingUp className="w-3.5 h-3.5 text-[#C26D2D]" />
+                  )}
+                  <span
+                    className={
+                      summary.rollingVsPriorPct <= 0 ? 'text-[#3F7D58]' : 'text-[#C26D2D]'
+                    }
+                  >
+                    {summary.rollingVsPriorPct > 0 ? '+' : ''}
+                    {summary.rollingVsPriorPct}%
+                  </span>
+                </>
+              )}
+            </p>
           </div>
         </div>
       </CardHeader>
 
-      <CardContent className="p-5 sm:p-6 pt-2">
-        <div className="h-80 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart
-              data={chartData}
-              margin={{ top: 20, right: 50, left: 0, bottom: 0 }}
-              onClick={(state) => {
-                if (state?.activePayload?.[0]?.payload?._entry && onDayClick) {
-                  onDayClick(state.activePayload[0].payload._entry);
-                }
-              }}
-            >
-              <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis
-                dataKey="date"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 10, fontWeight: 700 }}
-                dy={10}
-                interval={Math.max(0, Math.floor(chartData.length / 10))}
-              />
-              <YAxis
-                yAxisId="score"
-                orientation="left"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 10 }}
-                domain={[-200, 120]}
-                label={{
-                  value: 'VF Score',
-                  angle: -90,
-                  position: 'insideLeft',
-                  style: { fontSize: 10, fontWeight: 700, fill: '#6b7280' },
-                }}
-              />
-              <YAxis
-                yAxisId="cumu"
-                orientation="right"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fontSize: 10 }}
-                label={{
-                  value: lineMetric === 'levelPoints' ? 'Level Pts' : 'All-Time',
-                  angle: 90,
-                  position: 'insideRight',
-                  style: { fontSize: 10, fontWeight: 700, fill: activeLineColor },
-                }}
-              />
-              <Tooltip
-                contentStyle={{
-                  borderRadius: '12px',
-                  border: 'none',
-                  boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-                formatter={(value: number, name: string, item: any) => {
-                  const payload = item?.payload;
-                  if (name === 'score') {
-                    return [`${value > 0 ? '+' : ''}${value} pts`, 'Daily VF Score'];
+      <CardContent className="pt-5">
+        {isLoading && activeLogs.length === 0 ? (
+          <div className="h-[260px] flex items-center justify-center text-xs text-[#6E6359]">
+            Loading your daily pours...
+          </div>
+        ) : (
+          <div className="h-[270px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart
+                data={series}
+                margin={{ top: 10, right: 12, left: -16, bottom: 4 }}
+                onClick={(state) => {
+                  const idx = state?.activeTooltipIndex;
+                  if (typeof idx === 'number' && series[idx]) {
+                    handlePointClick(series[idx]);
                   }
-                  if (name === 'levelPoints') {
-                    const target = payload?.targetPoints ?? activeLevel.targetPoints;
-                    const lvlName = payload?.levelName ?? activeLevel.name;
-                    return [
-                      `${value > 0 ? '+' : ''}${value} / ${target} pts`,
-                      `${lvlName} Cumulative`,
-                    ];
-                  }
-                  return [value.toLocaleString(), 'All-Time Cumulative'];
                 }}
-              />
-              <ReferenceLine yAxisId="score" y={0} stroke="#94a3b8" strokeDasharray="3 3" />
-              {lineMetric === 'levelPoints' && scope === 'level' && (
-                <ReferenceLine
-                  yAxisId="cumu"
-                  y={activeLevel.targetPoints}
-                  stroke="#10b981"
-                  strokeDasharray="4 4"
-                  label={{
-                    value: `Goal ${activeLevel.targetPoints}`,
-                    position: 'right',
-                    fill: '#059669',
-                    fontSize: 10,
-                    fontWeight: 800,
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#E8DFD1" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fontSize: 11, fill: '#6E6359' }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#E8DFD1' }}
+                  minTickGap={rangeDays >= 90 ? 28 : 16}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: '#6E6359' }}
+                  tickLine={false}
+                  axisLine={false}
+                  tickFormatter={(v: number) => `${v}u`}
+                />
+                <Tooltip
+                  cursor={{ fill: '#FAF6F0', opacity: 0.7 }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const pt = payload[0].payload as DailyPoint;
+                    return (
+                      <div className="rounded-xl bg-[#1F1B18] text-[#FAF6F0] px-3.5 py-2.5 shadow-lg border border-[#352F2A] text-xs space-y-1">
+                        <div className="font-bold flex items-center justify-between gap-4">
+                          <span>{pt.label}</span>
+                          <span
+                            className={`font-black tabular-nums ${
+                              pt.isClearDay || pt.units === 0 ? 'text-[#84C39A]' : 'text-[#F5B076]'
+                            }`}
+                          >
+                            {formatUnits(pt.units)}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-[#D7CCC0] space-y-0.5">
+                          <div>
+                            7-day avg:{' '}
+                            <span className="font-bold text-white tabular-nums">
+                              {formatUnits(pt.sevenDayAvg)}
+                            </span>
+                          </div>
+                          <div>
+                            {pt.isClearDay
+                              ? 'Clear Day recorded'
+                              : `${pt.drinkCount} alcoholic ${pt.drinkCount === 1 ? 'pour' : 'pours'}`}
+                            {pt.zeroProofCount > 0
+                              ? ` • ${pt.zeroProofCount} zero-proof`
+                              : ''}
+                          </div>
+                        </div>
+                      </div>
+                    );
                   }}
                 />
-              )}
-              <Bar
-                yAxisId="score"
-                dataKey="score"
-                radius={[2, 2, 0, 0]}
-                cursor="pointer"
-                maxBarSize={18}
-              >
-                {chartData.map((entry, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={
-                      entry.score >= 50
-                        ? '#16a34a'
-                        : entry.score >= 0
-                          ? '#6b9ede'
-                          : entry.score >= -50
-                            ? '#f59e0b'
-                            : '#ef4444'
-                    }
-                    opacity={0.85}
-                  />
-                ))}
-              </Bar>
-              <Line
-                yAxisId="cumu"
-                type="monotone"
-                dataKey={activeLineKey}
-                stroke={activeLineColor}
-                strokeWidth={2.75}
-                dot={scope === 'level' ? { r: 2.5, fill: activeLineColor } : false}
-                activeDot={{ r: 5, fill: activeLineColor }}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+                <Bar
+                  dataKey="units"
+                  radius={[5, 5, 0, 0]}
+                  maxBarSize={rangeDays === 14 ? 26 : rangeDays === 30 ? 16 : 8}
+                  className="cursor-pointer"
+                >
+                  {series.map((pt) => {
+                    const isGreen =
+                      pt.isClearDay || (pt.zeroProofCount > 0 && pt.units === 0);
+                    const fill = isGreen
+                      ? '#3F7D58'
+                      : pt.units > 0
+                        ? '#C26D2D'
+                        : '#E8DFD1';
+                    return (
+                      <Cell
+                        key={pt.dateKey}
+                        fill={fill}
+                        fillOpacity={pt.units === 0 && !isGreen ? 0.55 : 0.9}
+                      />
+                    );
+                  })}
+                </Bar>
+                <Line
+                  type="monotone"
+                  dataKey="sevenDayAvg"
+                  stroke="#1F1B18"
+                  strokeWidth={2.5}
+                  dot={false}
+                  activeDot={{ r: 4, fill: '#1F1B18', stroke: '#FAF6F0', strokeWidth: 2 }}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-4 pt-3 text-[11px] text-[#6E6359]">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#C26D2D]" />
+            Daily Standard Units
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#3F7D58]" />
+            Clear / Zero-Proof Day
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-4 h-0.5 bg-[#1F1B18]" />
+            7-Day Rolling Avg
+          </span>
         </div>
-        <p className="text-[10px] font-bold text-muted-foreground text-center mt-2 opacity-60">
-          Green line tracks cumulative Level points ({activeLevel.name} goal: {activeLevel.targetPoints} pts) · Click any bar to inspect day math
-        </p>
       </CardContent>
     </Card>
   );
 }
+
+export const VFScoreChart = VfScoreChart;

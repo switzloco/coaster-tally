@@ -1,62 +1,13 @@
 import { ImageResponse } from 'next/og';
 import { getAdminFirestore } from '@/firebase/admin';
-import { adminHealthService as healthService } from '@/lib/health-service-admin';
+import { healthService } from '@/lib/health-service';
+import { FoodLogEntry } from '@/lib/food-exercise-types';
+import { formatUnits, getEntryUnits, isClearDayEntry } from '@/lib/drink-units';
 
-export const alt = 'Shared meal';
+export const runtime = 'nodejs';
+export const alt = 'Coaster shared pour card';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
-
-// Briefcase SVG path (Lucide icon, scaled for 28×28 viewBox)
-const BriefcasePath = () => (
-  <svg
-    width={32}
-    height={32}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="white"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    style={{ flexShrink: 0 }}
-  >
-    <rect width="20" height="14" x="2" y="7" rx="2" ry="2" />
-    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-  </svg>
-);
-
-function MacroPill({
-  label,
-  value,
-  unit,
-  accent,
-}: {
-  label: string;
-  value: number;
-  unit: string;
-  accent: string;
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        background: accent,
-        borderRadius: 16,
-        padding: '18px 28px',
-        minWidth: 200,
-        gap: 6,
-      }}
-    >
-      <span style={{ fontSize: 40, fontWeight: 800, color: '#0f172a', lineHeight: 1.1 }}>
-        {Math.round(value)}{unit}
-      </span>
-      <span style={{ fontSize: 15, fontWeight: 700, color: '#64748b', letterSpacing: 2, textTransform: 'uppercase' }}>
-        {label}
-      </span>
-    </div>
-  );
-}
 
 export default async function OgImage({
   params,
@@ -65,80 +16,162 @@ export default async function OgImage({
 }) {
   const { shareId } = await params;
 
-  let title = 'Shared meal';
-  let attribution = '';
-  let totals = { calories: 0, proteinG: 0, carbsG: 0, fatG: 0 };
-  let itemCount = 1;
+  let title = 'Shared Coaster Card';
+  let creator = '';
+  let totalUnits = 0;
+  let pourNames: string[] = [];
 
   try {
     const db = getAdminFirestore();
     const share = await healthService.getSharedMeal(db, shareId);
     if (share && !share.revoked) {
-      title = share.title;
-      attribution = share.createdByName ? `${share.createdByName} shared this meal` : 'Shared via the CFO';
-      totals = share.totals;
-      itemCount = share.items?.length ?? 1;
+      title = share.title || title;
+      creator = share.createdByName || '';
+      const items = share.items ?? [];
+      totalUnits =
+        Math.round(
+          items.reduce((sum, item) => {
+            const asEntry = {
+              ...item,
+              id: 'og',
+              timestamp: new Date(),
+              date: '2026-01-01',
+            } as FoodLogEntry;
+            return sum + (isClearDayEntry(asEntry) ? 0 : getEntryUnits(asEntry));
+          }, 0) * 10
+        ) / 10;
+      pourNames = items
+        .map((i) => i.name)
+        .filter(Boolean)
+        .slice(0, 4);
     }
   } catch {
-    /* fall through to defaults */
+    // render clean fallback card
   }
+
+  const isZero = totalUnits === 0;
 
   return new ImageResponse(
     (
       <div
         style={{
-          display: 'flex',
-          flexDirection: 'column',
           width: '100%',
           height: '100%',
-          background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
-          padding: 60,
+          display: 'flex',
+          flexDirection: 'column',
           justifyContent: 'space-between',
+          backgroundColor: '#FAF6F0',
+          padding: '56px 64px',
+          color: '#1F1B18',
+          fontFamily: 'sans-serif',
         }}
       >
-        {/* Header: wordmark + attribution */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <BriefcasePath />
-            <span style={{ color: '#94a3b8', fontSize: 20, fontWeight: 700, letterSpacing: 2, textTransform: 'uppercase' }}>
-              the CFO
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: '#C26D2D',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#FAF6F0',
+                fontSize: 22,
+                fontWeight: 900,
+              }}
+            >
+              C
+            </div>
+            <span style={{ fontSize: 28, fontWeight: 900, letterSpacing: '-0.02em' }}>
+              Coaster
             </span>
           </div>
-          {attribution ? (
-            <span style={{ color: '#64748b', fontSize: 22, fontWeight: 500 }}>
-              {attribution}
-            </span>
-          ) : null}
-        </div>
-
-        {/* Meal title */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ color: '#ffffff', fontSize: 64, fontWeight: 900, lineHeight: 1.1, letterSpacing: -1 }}>
-            {title}
-          </span>
-          {itemCount > 1 && (
-            <span style={{ color: '#64748b', fontSize: 22, fontWeight: 500 }}>
-              {itemCount} items
+          {creator && (
+            <span style={{ fontSize: 22, fontWeight: 600, color: '#6E6359' }}>
+              Shared by {creator}
             </span>
           )}
         </div>
 
-        {/* Macro pills */}
-        <div style={{ display: 'flex', gap: 16 }}>
-          <MacroPill label="Calories" value={totals.calories} unit="" accent="#fef9c3" />
-          <MacroPill label="Protein" value={totals.proteinG} unit="g" accent="#d1fae5" />
-          <MacroPill label="Carbs" value={totals.carbsG} unit="g" accent="#fef3c7" />
-          <MacroPill label="Fat" value={totals.fatG} unit="g" accent="#fce7f3" />
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-end',
+            backgroundColor: '#FFFDF9',
+            border: '2px solid #E8DFD1',
+            borderRadius: 32,
+            padding: '42px 48px',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: '68%' }}>
+            <span
+              style={{
+                fontSize: 18,
+                fontWeight: 800,
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
+                color: '#C26D2D',
+              }}
+            >
+              Standard Drink Units
+            </span>
+            <span style={{ fontSize: 48, fontWeight: 900, lineHeight: 1.1 }}>
+              {title}
+            </span>
+            <span style={{ fontSize: 24, color: '#6E6359', lineHeight: 1.35 }}>
+              {pourNames.length > 0 ? pourNames.join('  •  ') : 'Coaster Pour Ledger'}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-end',
+              backgroundColor: isZero ? '#EAF3ED' : '#FBF0E4',
+              borderRadius: 24,
+              padding: '24px 32px',
+            }}
+          >
+            <span
+              style={{
+                fontSize: 72,
+                fontWeight: 900,
+                color: isZero ? '#3F7D58' : '#C26D2D',
+                lineHeight: 1,
+              }}
+            >
+              {formatUnits(totalUnits)}
+            </span>
+            <span style={{ fontSize: 20, fontWeight: 700, color: '#6E6359', marginTop: 8 }}>
+              {isZero ? 'Zero-Proof / Clear' : 'NIAAA 14g Std'}
+            </span>
+          </div>
         </div>
 
-        {/* Footer tagline */}
-        <span style={{ color: '#334155', fontSize: 18, fontWeight: 600 }}>
-          Track your nutrition like a portfolio · CFO Fitness
-        </span>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            fontSize: 20,
+            color: '#6E6359',
+            fontWeight: 600,
+          }}
+        >
+          <span>Mindful drinks &amp; clear days — zero judgment</span>
+          <span>1.0u = 0.6 fl oz pure alcohol</span>
+        </div>
       </div>
     ),
-    {
-      ...size,
-    },
+    { ...size }
   );
 }

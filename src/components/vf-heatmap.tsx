@@ -1,147 +1,245 @@
 'use client';
 
-import React from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { CalendarDays } from 'lucide-react';
-import type { HistoryEntry } from '@/lib/health-service';
+import React, { useMemo } from 'react';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { HistoryEntry } from '@/lib/health-service';
+import { FoodLogEntry } from '@/lib/food-exercise-types';
+import { computeDailyTrendSeries, formatUnits } from '@/lib/drink-units';
+import { useUser, useFirestore, useCollection, useMemoFirebase } from '@/firebase';
+import { collection, query, where } from 'firebase/firestore';
+import { Leaf } from 'lucide-react';
 
-interface VFHeatmapProps {
-  history: HistoryEntry[];
+type DailyPoint = ReturnType<typeof computeDailyTrendSeries>[number];
+
+export interface VfHeatmapProps {
+  history?: HistoryEntry[];
   onDayClick?: (entry: HistoryEntry) => void;
+  logs?: FoodLogEntry[];
+  anchorDateKey?: string;
 }
 
-const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-function scoreToColor(score: number): string {
-  if (score >= 80) return '#15803d';   // dark green
-  if (score >= 50) return '#22c55e';   // green
-  if (score >= 20) return '#4ade80';   // light green
-  if (score >= 0)  return '#bbf7d0';   // very light green
-  if (score >= -25) return '#fed7aa';  // light orange
-  if (score >= -50) return '#fdba74';  // orange
-  if (score >= -100) return '#fb923c'; // dark orange
-  return '#ef4444';                    // red
+function getLocalDateKeyOffset(daysAgo = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function getISOWeek(d: Date): number {
-  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+function getMonBasedWeekday(dateKey: string): number {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return (dt.getDay() + 6) % 7; // Mon = 0 .. Sun = 6
 }
 
-function getISODayOfWeek(d: Date): number {
-  // Monday=0, Sunday=6
-  return (d.getDay() + 6) % 7;
-}
-
-export function VFHeatmap({ history, onDayClick }: VFHeatmapProps) {
-  // Build a map of isoDate -> entry (prefer last entry per date)
-  const byDate = new Map<string, HistoryEntry>();
-  for (const entry of history) {
-    if (entry.isoDate) {
-      byDate.set(entry.isoDate, entry);
-    }
+function getCellAppearance(point: DailyPoint): {
+  bgClass: string;
+  textClass: string;
+  label: string;
+} {
+  if (point.isClearDay || (point.zeroProofCount > 0 && point.units === 0)) {
+    return {
+      bgClass: 'bg-[#3F7D58] border-[#346949] hover:ring-2 hover:ring-[#3F7D58]/40',
+      textClass: 'text-white',
+      label: 'Clear Day',
+    };
   }
+  if (point.units === 0) {
+    return {
+      bgClass: 'bg-[#FAF6F0] border-[#E8DFD1] hover:border-[#C26D2D]/50',
+      textClass: 'text-[#6E6359]',
+      label: 'Quiet',
+    };
+  }
+  if (point.units <= 1.5) {
+    return {
+      bgClass: 'bg-[#F4D5A6] border-[#E5BD7E] hover:ring-2 hover:ring-[#C26D2D]/30',
+      textClass: 'text-[#1F1B18]',
+      label: 'Light',
+    };
+  }
+  if (point.units <= 3.0) {
+    return {
+      bgClass: 'bg-[#D98A43] border-[#C26D2D] hover:ring-2 hover:ring-[#C26D2D]/40',
+      textClass: 'text-white',
+      label: 'Moderate',
+    };
+  }
+  return {
+    bgClass: 'bg-[#A8541F] border-[#8A4215] hover:ring-2 hover:ring-[#A8541F]/40',
+    textClass: 'text-white',
+    label: 'Social',
+  };
+}
 
-  if (byDate.size === 0) return null;
+export function VfHeatmap({
+  onDayClick,
+  logs: propLogs,
+  anchorDateKey,
+}: VfHeatmapProps) {
+  const { user } = useUser();
+  const db = useFirestore();
 
-  // Determine date range from the data
-  const dates = Array.from(byDate.keys()).sort();
-  const firstDate = new Date(dates[0] + 'T00:00:00');
-  const lastDate = new Date(dates[dates.length - 1] + 'T00:00:00');
+  const anchor = anchorDateKey || getLocalDateKeyOffset(0);
+  const cutoff90 = useMemo(() => getLocalDateKeyOffset(95), []);
 
-  // Build week columns
-  const firstWeek = getISOWeek(firstDate);
-  const lastWeek = getISOWeek(lastDate);
+  const logsQuery = useMemoFirebase(() => {
+    if (propLogs || !user || !db) return null;
+    return query(
+      collection(db, 'users', user.uid, 'food_log'),
+      where('date', '>=', cutoff90)
+    );
+  }, [propLogs, user, db, cutoff90]);
 
-  // Handle year boundary: if lastWeek < firstWeek, the data spans a year boundary
-  const weekCount = lastWeek >= firstWeek
-    ? lastWeek - firstWeek + 1
-    : (52 - firstWeek + 1) + lastWeek;
+  const { data: queriedLogs } = useCollection<FoodLogEntry>(logsQuery);
 
-  const weeks = Array.from({ length: weekCount }, (_, i) => {
-    const w = ((firstWeek - 1 + i) % 52) + 1;
-    return w;
-  });
-
-  // Build grid: weekIndex -> dayOfWeek -> entry
-  const grid: (HistoryEntry | null)[][] = weeks.map(() =>
-    Array.from({ length: 7 }, () => null)
+  const activeLogs = useMemo(
+    () => (propLogs ?? queriedLogs ?? []).filter((entry) => !entry.ignored),
+    [propLogs, queriedLogs]
   );
 
-  for (const [iso, entry] of byDate) {
-    const d = new Date(iso + 'T00:00:00');
-    const week = getISOWeek(d);
-    const weekIdx = weeks.indexOf(week);
-    if (weekIdx >= 0) {
-      const dayIdx = getISODayOfWeek(d);
-      grid[weekIdx][dayIdx] = entry;
-    }
-  }
+  const series90 = useMemo(
+    () => computeDailyTrendSeries(activeLogs, 90, anchor),
+    [activeLogs, anchor]
+  );
 
-  const cellSize = 28;
-  const gap = 3;
+  const { columns, clearCount, socialDaysCount } = useMemo(() => {
+    if (series90.length === 0) {
+      return { columns: [] as (DailyPoint | null)[][], clearCount: 0, socialDaysCount: 0 };
+    }
+
+    const firstWeekday = getMonBasedWeekday(series90[0].dateKey);
+    const padded: (DailyPoint | null)[] = [
+      ...Array.from({ length: firstWeekday }, () => null),
+      ...series90,
+    ];
+    const cols: (DailyPoint | null)[][] = [];
+    for (let i = 0; i < padded.length; i += 7) {
+      const slice = padded.slice(i, i + 7);
+      while (slice.length < 7) slice.push(null);
+      cols.push(slice);
+    }
+
+    let clear = 0;
+    let social = 0;
+    for (const pt of series90) {
+      if (pt.isClearDay || (pt.zeroProofCount > 0 && pt.units === 0)) clear += 1;
+      if (pt.units > 0) social += 1;
+    }
+
+    return { columns: cols, clearCount: clear, socialDaysCount: social };
+  }, [series90]);
+
+  const handleCellClick = (pt: DailyPoint) => {
+    if (!onDayClick) return;
+    onDayClick({
+      isoDate: pt.dateKey,
+      date: pt.label,
+      gain: 0,
+      status: 'Stable',
+      detail: pt.isClearDay
+        ? 'Clear Day (0.0u)'
+        : `${formatUnits(pt.units)} • ${pt.drinkCount} ${pt.drinkCount === 1 ? 'pour' : 'pours'}`,
+      equity: pt.units,
+    });
+  };
+
+  const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   return (
-    <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-      <CardHeader className="p-6 pb-0">
-        <CardTitle className="text-[12px] font-black uppercase text-muted-foreground tracking-widest flex items-center gap-3">
-          <CalendarDays className="w-4 h-4" />
-          VF Score Calendar
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="p-6 pt-4 overflow-x-auto">
-        <div className="min-w-fit">
-          {/* Week labels */}
-          <div className="flex" style={{ marginLeft: 52 }}>
-            {weeks.map((w, i) => (
-              <div
-                key={i}
-                className="text-[10px] font-bold text-muted-foreground text-center"
-                style={{ width: cellSize, marginRight: gap }}
-              >
-                {w}
-              </div>
-            ))}
+    <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+      <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div>
+            <CardTitle className="text-base sm:text-lg font-bold text-[#1F1B18]">
+              90-Day Coaster Calendar
+            </CardTitle>
+            <CardDescription className="text-xs text-[#6E6359] mt-0.5">
+              Click any square to review pours or toggle a Clear Day.
+            </CardDescription>
           </div>
 
-          {/* Grid rows */}
-          {DAY_LABELS.map((label, dayIdx) => (
-            <div key={dayIdx} className="flex items-center" style={{ marginTop: gap }}>
-              <div className="text-[10px] font-bold text-muted-foreground w-12 text-right pr-2 shrink-0">
-                {label}
-              </div>
-              {weeks.map((_, weekIdx) => {
-                const entry = grid[weekIdx]?.[dayIdx];
-                return (
-                  <div
-                    key={weekIdx}
-                    className={`rounded-sm ${entry ? 'cursor-pointer hover:ring-2 hover:ring-primary/40 transition-all' : ''}`}
-                    style={{
-                      width: cellSize,
-                      height: cellSize,
-                      marginRight: gap,
-                      backgroundColor: entry ? scoreToColor(entry.gain) : '#f3f4f6',
-                    }}
-                    title={entry ? `${entry.date}: ${entry.gain > 0 ? '+' : ''}${entry.gain} pts` : undefined}
-                    onClick={() => entry && onDayClick?.(entry)}
-                  />
-                );
-              })}
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#3F7D58]/10 border border-[#3F7D58]/25 px-2.5 py-1 text-xs font-bold text-[#3F7D58]">
+              <Leaf className="w-3 h-3" />
+              {clearCount} Clear Days
+            </span>
+            <span className="inline-flex items-center rounded-full bg-[#FAF6F0] border border-[#E8DFD1] px-2.5 py-1 text-xs font-semibold text-[#6E6359]">
+              {socialDaysCount} pour days
+            </span>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="pt-4 space-y-4">
+        <div className="overflow-x-auto pb-1">
+          <div className="inline-flex items-start gap-2 min-w-max">
+            <div className="grid grid-rows-7 gap-1.5 pr-1 pt-0.5">
+              {weekdayLabels.map((day, idx) => (
+                <div
+                  key={day}
+                  className="h-5 sm:h-6 flex items-center text-[10px] font-semibold text-[#6E6359]"
+                >
+                  {idx % 2 === 0 ? day : ''}
+                </div>
+              ))}
             </div>
-          ))}
+
+            <div className="flex gap-1.5">
+              {columns.map((col, colIdx) => (
+                <div key={colIdx} className="grid grid-rows-7 gap-1.5">
+                  {col.map((pt, rowIdx) => {
+                    if (!pt) {
+                      return <div key={`empty-${colIdx}-${rowIdx}`} className="w-5 h-5 sm:w-6 sm:h-6" />;
+                    }
+                    const style = getCellAppearance(pt);
+                    const isToday = pt.dateKey === anchor;
+                    const titleText = `${pt.label} (${pt.dateKey}): ${formatUnits(pt.units)} — ${style.label}`;
+                    return (
+                      <button
+                        key={pt.dateKey}
+                        type="button"
+                        onClick={() => handleCellClick(pt)}
+                        title={titleText}
+                        aria-label={titleText}
+                        className={`w-5 h-5 sm:w-6 sm:h-6 rounded-md border transition-all cursor-pointer flex items-center justify-center ${style.bgClass} ${
+                          isToday ? 'ring-2 ring-[#1F1B18] ring-offset-1 ring-offset-[#FFFDF9]' : ''
+                        }`}
+                      />
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* Legend */}
-        <div className="flex items-center gap-2 mt-4 justify-center">
-          <span className="text-[10px] font-bold text-muted-foreground">-100</span>
-          {['#ef4444', '#fb923c', '#fdba74', '#fed7aa', '#bbf7d0', '#4ade80', '#22c55e', '#15803d'].map((color) => (
-            <div key={color} className="w-4 h-4 rounded-sm" style={{ backgroundColor: color }} />
-          ))}
-          <span className="text-[10px] font-bold text-muted-foreground">+100</span>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#6E6359] pt-1 border-t border-[#E8DFD1]/60">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded bg-[#3F7D58] border border-[#346949]" />
+              Clear (0.0u)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded bg-[#FAF6F0] border border-[#E8DFD1]" />
+              Quiet
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded bg-[#F4D5A6] border border-[#E5BD7E]" />
+              Light (&le;1.5u)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded bg-[#D98A43] border border-[#C26D2D]" />
+              Moderate (&le;3.0u)
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-3.5 h-3.5 rounded bg-[#A8541F] border border-[#8A4215]" />
+              Social (3.1u+)
+            </span>
+          </div>
+          <span className="text-[10px] font-medium">Last 90 days</span>
         </div>
       </CardContent>
     </Card>
   );
 }
+
+export const VFHeatmap = VfHeatmap;

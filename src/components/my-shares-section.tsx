@@ -1,144 +1,177 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Link2, Loader2, Share2, Trash2, Users } from 'lucide-react';
+import Link from 'next/link';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { useUser } from '@/firebase';
-import { toast } from '@/hooks/use-toast';
 import { getMyShares, revokeShare } from '@/app/actions/share-meal';
-import { shareUrl } from '@/lib/site';
+import { shareUrl } from '@/lib/share-text';
+import { formatUnits } from '@/lib/drink-units';
+import { useToast } from '@/hooks/use-toast';
+import { Copy, ExternalLink, Loader2, Share2, Trash2 } from 'lucide-react';
 
-type ShareRow = {
+interface ShareListItem {
   id: string;
-  title: string;
-  totals: { calories: number; proteinG: number; carbsG: number; fatG: number; fiberG: number };
-  logCount: number;
-  viewCount: number;
+  title?: string;
+  totals?: {
+    standardUnits?: number;
+    alcoholDrinks?: number;
+    calories?: number;
+  };
+  viewCount?: number;
+  logCount?: number;
   revoked?: boolean;
-};
+}
 
 export function MySharesSection() {
   const { user } = useUser();
-  const [rows, setRows] = useState<ShareRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [revoking, setRevoking] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
+  const { toast } = useToast();
 
-  const load = useCallback(async () => {
+  const [shares, setShares] = useState<ShareListItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+
+  const loadShares = useCallback(async () => {
     if (!user) return;
     setLoading(true);
-    const res = await getMyShares(user.uid);
-    if (res.success) setRows(res.shares as ShareRow[]);
-    setLoading(false);
+    try {
+      const res = await getMyShares(user.uid);
+      if (res.success) {
+        setShares(
+          (res.shares as unknown as ShareListItem[]).filter((s) => !s.revoked)
+        );
+      }
+    } catch {
+      // silent load fallback
+    } finally {
+      setLoading(false);
+    }
   }, [user]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    loadShares();
+  }, [loadShares]);
 
   const handleCopy = async (shareId: string) => {
     const url = shareUrl(shareId);
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(shareId);
-      setTimeout(() => setCopied(null), 2000);
-    } catch {
-      toast({ variant: 'destructive', title: 'Could not copy', description: 'Copy the URL manually.' });
-    }
+    await navigator.clipboard?.writeText(url);
+    toast({
+      title: 'Link copied',
+      description: 'Coaster round URL copied to clipboard.',
+    });
   };
 
   const handleRevoke = async (shareId: string) => {
-    if (!user || revoking) return;
-    setRevoking(shareId);
-    const res = await revokeShare(user.uid, shareId);
-    if (res.success) {
-      setRows(prev => prev.map(r => r.id === shareId ? { ...r, revoked: true } : r));
-      toast({ title: 'Link revoked', description: 'Nobody can access this share anymore.' });
-    } else {
-      toast({ variant: 'destructive', title: 'Could not revoke', description: res.error });
+    if (!user) return;
+    setRevokingId(shareId);
+    try {
+      const res = await revokeShare(user.uid, shareId);
+      if (!res.success) {
+        throw new Error(res.error || 'Could not revoke link');
+      }
+      setShares((prev) => prev.filter((s) => s.id !== shareId));
+      toast({
+        title: 'Share link revoked',
+        description: 'This link can no longer be viewed publicly.',
+      });
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Could not revoke link',
+      });
+    } finally {
+      setRevokingId(null);
     }
-    setRevoking(null);
   };
 
-  const active = rows.filter(r => !r.revoked);
-  const revoked = rows.filter(r => r.revoked);
-
-  if (!user || loading) {
-    return loading ? (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-      </div>
-    ) : null;
-  }
-
-  if (rows.length === 0) return null;
+  if (!user || (!loading && shares.length === 0)) return null;
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-[12px] font-black text-muted-foreground uppercase tracking-[0.2em] italic px-1">
-        Shared Links
-      </h3>
+    <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+      <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+        <CardTitle className="text-base font-bold text-[#1F1B18] flex items-center gap-2">
+          <Share2 className="w-4 h-4 text-[#C26D2D]" />
+          Shared Coaster Cards ({shares.length})
+        </CardTitle>
+        <CardDescription className="text-xs text-[#6E6359]">
+          Rounds and drink cards you&apos;ve shared. Revoke a link anytime.
+        </CardDescription>
+      </CardHeader>
 
-      {active.length > 0 && (
-        <div className="space-y-3">
-          {active.map(share => (
-            <Card key={share.id} className="border-none shadow-sm bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex flex-col gap-1 min-w-0">
-                    <p className="text-sm font-bold truncate">{share.title}</p>
-                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                      <span className="tabular-nums">{Math.round(share.totals.calories)} cal · {Math.round(share.totals.proteinG)}g P</span>
-                      {share.logCount > 0 && (
-                        <span className="flex items-center gap-1">
-                          <Users className="w-3 h-3" />
-                          {share.logCount} logged
-                        </span>
-                      )}
-                      {share.viewCount > 0 && (
-                        <span>{share.viewCount} views</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      onClick={() => handleCopy(share.id)}
-                      title="Copy share link"
-                      className="p-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                    >
-                      {copied === share.id
-                        ? <Link2 className="w-3.5 h-3.5 text-emerald-600" />
-                        : <Link2 className="w-3.5 h-3.5" />
-                      }
-                    </button>
-                    <button
-                      onClick={() => handleRevoke(share.id)}
-                      disabled={revoking === share.id}
-                      title="Revoke link"
-                      className="p-2 rounded-lg hover:bg-red-50 transition-colors text-muted-foreground hover:text-red-600 disabled:opacity-50"
-                    >
-                      {revoking === share.id
-                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        : <Trash2 className="w-3.5 h-3.5" />
-                      }
-                    </button>
-                  </div>
+      <CardContent className="pt-4 space-y-2.5">
+        {loading && shares.length === 0 ? (
+          <div className="py-4 text-center text-xs text-[#6E6359]">Loading shared links...</div>
+        ) : (
+          shares.map((item) => {
+            const units =
+              item.totals?.standardUnits ?? item.totals?.alcoholDrinks;
+            const heading = item.title || 'Shared Coaster Card';
+
+            return (
+              <div
+                key={item.id}
+                className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] px-3.5 py-2.5 flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-sm font-bold text-[#1F1B18] truncate">{heading}</p>
+                  <p className="text-[11px] text-[#6E6359]">
+                    {typeof units === 'number' && (
+                      <span className="font-bold text-[#C26D2D] tabular-nums mr-1.5">
+                        {formatUnits(Math.round(units * 10) / 10)} •
+                      </span>
+                    )}
+                    {typeof item.viewCount === 'number' ? `${item.viewCount} views` : 'Active'}
+                    {typeof item.logCount === 'number' && item.logCount > 0
+                      ? ` • ${item.logCount} saved`
+                      : ''}
+                  </p>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
 
-      {revoked.length > 0 && (
-        <div className="space-y-2">
-          {revoked.map(share => (
-            <div key={share.id} className="flex items-center gap-3 px-4 py-2.5 rounded-xl ring-1 ring-border opacity-40">
-              <Share2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-              <span className="text-xs text-muted-foreground truncate line-through">{share.title}</span>
-              <span className="text-[10px] text-muted-foreground ml-auto shrink-0">Revoked</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => handleCopy(item.id)}
+                    aria-label="Copy share link"
+                    className="h-8 w-8 text-[#6E6359] hover:text-[#1F1B18]"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    asChild
+                    aria-label="Open shared card"
+                    className="h-8 w-8 text-[#6E6359] hover:text-[#1F1B18]"
+                  >
+                    <Link href={`/m/${item.id}`}>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </Link>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    disabled={revokingId === item.id}
+                    onClick={() => handleRevoke(item.id)}
+                    aria-label="Revoke share link"
+                    className="h-8 w-8 text-[#6E6359] hover:text-[#C26D2D]"
+                  >
+                    {revokingId === item.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </CardContent>
+    </Card>
   );
 }

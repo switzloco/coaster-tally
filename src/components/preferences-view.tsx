@@ -1,50 +1,89 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Calendar, Construction, Target, Save, Plus, X, Briefcase, Fingerprint, Check, Loader2, Trophy, Activity, MessageSquare, Sliders, Search, Trash2, Utensils, Tag, ShieldCheck, Sparkles, Cpu, Lock, Zap } from "lucide-react";
-import { resolveClientEntitlement } from "@/lib/entitlements";
-import { PaywallModal } from "@/components/paywall-modal";
-import { Switch } from "@/components/ui/switch";
-import { useUser, useFirestore, useDoc, useMemoFirebase, useAuth } from '@/firebase';
-import { doc } from 'firebase/firestore';
-import { healthService, UserPreferences, HealthData } from '@/lib/health-service';
-import { useToast } from '@/hooks/use-toast';
-import { Progress } from '@/components/ui/progress';
-import { deleteNickname } from '@/app/actions/delete-nickname';
-import { deleteMyAccountAction } from '@/app/actions/delete-account';
-import { submitContactForm } from '@/app/actions/contact';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
-import { Share2, Send } from 'lucide-react';
-import { isNativeShell } from '@/lib/auth-environment';
-import { signOut } from 'firebase/auth';
-import { OutreachSettingsCard } from '@/components/outreach-settings-card';
+import { healthService, type OutreachPreferences } from '@/lib/health-service';
+import {
+  fetchAllLedger,
+  ledgerToCSV,
+  ledgerToJSON,
+  downloadTextFile,
+} from '@/lib/ledger-export';
+import { useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
+import { doc, setDoc } from 'firebase/firestore';
 import { useHybridAi } from '@/components/hybrid-ai-provider';
 import { ExecutionReceiptBadge } from '@/components/execution-receipt-badge';
+import { OutreachSettingsCard } from '@/components/outreach-settings-card';
+import { MySharesSection } from '@/components/my-shares-section';
+import { deleteMyAccountAction } from '@/app/actions/delete-account';
+import { submitContactForm } from '@/app/actions/contact';
+import { useToast } from '@/hooks/use-toast';
+import { getAuth, signOut } from 'firebase/auth';
+import {
+  Bell,
+  Check,
+  Copy,
+  Cpu,
+  Download,
+  Globe,
+  Loader2,
+  Lock,
+  MessageSquare,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 
-// Rank tiers — financial seniority ladder matching the app's portfolio metaphor
-const RANKS = [
-  { label: 'Analyst I',         min: 0,     max: 999,      color: 'text-slate-500',   bg: 'bg-slate-100'   },
-  { label: 'Analyst II',        min: 1000,  max: 1999,     color: 'text-blue-500',    bg: 'bg-blue-100'    },
-  { label: 'Associate',         min: 2000,  max: 2999,     color: 'text-indigo-500',  bg: 'bg-indigo-100'  },
-  { label: 'Vice President',    min: 3000,  max: 4999,     color: 'text-violet-600',  bg: 'bg-violet-100'  },
-  { label: 'Director',          min: 5000,  max: 7499,     color: 'text-amber-600',   bg: 'bg-amber-100'   },
-  { label: 'Managing Director', min: 7500,  max: 9999,     color: 'text-orange-600',  bg: 'bg-orange-100'  },
-  { label: 'Partner',           min: 10000, max: Infinity,  color: 'text-emerald-600', bg: 'bg-emerald-100' },
-] as const;
-
-function getRank(points: number) {
-  return RANKS.find(r => points >= r.min && points <= r.max) ?? RANKS[0];
+interface CoasterUserDoc {
+  timezone?: string;
+  quietEveningEnabled?: boolean;
+  quietEveningHour?: string;
+  preferredZeroProofFlavors?: string[];
 }
 
-const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const ZERO_PROOF_TASTE_OPTIONS = [
+  { id: 'citrus', label: 'Bright Citrus', hint: 'Grapefruit, yuzu, lime soda' },
+  { id: 'bitter', label: 'Bitter & Aperitif', hint: 'Gentian, amaro, tonic' },
+  { id: 'hoppy_na', label: 'Hoppy NA', hint: 'Dry-hopped sparkling, 0.0% pils' },
+  { id: 'botanical', label: 'Botanical & Herbal', hint: 'Juniper, rosemary, cucumber' },
+  { id: 'spicy_ginger', label: 'Ginger & Spice', hint: 'Fiery ginger beer, chili lime' },
+  { id: 'dry_crisp', label: 'Dry & Mineral', hint: 'De-alcoholized bubbles, club soda' },
+] as const;
+
+const EVENING_HOURS = [
+  { value: '17:00', label: '5:00 PM' },
+  { value: '18:00', label: '6:00 PM' },
+  { value: '19:00', label: '7:00 PM' },
+  { value: '20:00', label: '8:00 PM' },
+  { value: '21:00', label: '9:00 PM' },
+  { value: '22:00', label: '10:00 PM' },
+];
+
+const FALLBACK_TIMEZONES = [
+  'America/Los_Angeles',
+  'America/Denver',
+  'America/Chicago',
+  'America/New_York',
+  'America/Toronto',
+  'Europe/London',
+  'Europe/Paris',
+  'Europe/Berlin',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+  'UTC',
+];
 
 export function PreferencesView() {
   const { user } = useUser();
+  const db = useFirestore();
+  const { toast } = useToast();
   const {
     nanoStatus,
     isWarmingNano,
@@ -58,1203 +97,601 @@ export function PreferencesView() {
     appCheck,
     recentReceipts,
   } = useHybridAi();
-  const auth = useAuth();
-  const db = useFirestore();
-  const { toast } = useToast();
-  const [prefs, setPrefs] = useState<UserPreferences | null>(null);
-  const [schedule, setSchedule] = useState<Record<string, string>>({});
-  const [newAsset, setNewAsset] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const [savedRecently, setSavedRecently] = useState(false);
-  const isLoadedRef = useRef(false);
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Live points subscription
-  const userDocRef = useMemoFirebase(() => user ? doc(db, 'users', user.uid) : null, [db, user]);
-  const { data: healthData } = useDoc<HealthData>(userDocRef);
-  const points = healthData?.visceralFatPoints ?? 0;
-
-  // Body composition inputs — seeded from live health data
-  const [heightCm, setHeightCm] = useState('');
-  const [weightKg, setWeightKg] = useState('');
-  const [bodyFatPct, setBodyFatPct] = useState('');
-  const [isSavingBodyComp, setIsSavingBodyComp] = useState(false);
-  const [bodyCompSavedRecently, setBodyCompSavedRecently] = useState(false);
-
-  // Nicknames (Ticker Book) state
-  const [nicknameSearch, setNicknameSearch] = useState('');
-  const [nicknameMealFilter, setNicknameMealFilter] = useState<'all' | 'breakfast' | 'lunch' | 'dinner' | 'snack'>('all');
-  const [deletingNicknameKey, setDeletingNicknameKey] = useState<string | null>(null);
-  const [paywallOpen, setPaywallOpen] = useState(false);
-  const [isOpeningPortal, setIsOpeningPortal] = useState(false);
-  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
-  const [feedbackMessage, setFeedbackMessage] = useState('');
-  const [isSendingFeedback, setIsSendingFeedback] = useState(false);
-  const [copiedGiftLink, setCopiedGiftLink] = useState(false);
-
-  const handleShareGiftCredits = async () => {
-    const giftUrl = 'https://cfofitness.app/?gift=FRIENDS25';
-    const shareText = `Here are 25 bonus AI CFO coaching credits on CFO Fitness (plus the daily Visceral Fat & 3-day macro cockpit is free forever): ${giftUrl}`;
-    if (typeof navigator !== 'undefined' && 'share' in navigator) {
-      try {
-        await navigator.share({
-          title: '25 Free AI CFO Credits — CFO Fitness',
-          text: shareText,
-          url: giftUrl,
-        });
-        return;
-      } catch {
-        // Fall through to clipboard copy if user cancels native share sheet
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(shareText);
-      setCopiedGiftLink(true);
-      toast({
-        title: 'Friends & Family Credit Link Copied!',
-        description: 'Paste it into an email or text — gives +25 bonus AI CFO audits (1-time per person).',
-      });
-      setTimeout(() => setCopiedGiftLink(false), 3000);
-    } catch {
-      toast({
-        title: 'Share Link',
-        description: giftUrl,
-      });
-    }
-  };
-
-  const handleSendFeedback = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!feedbackMessage.trim()) return;
-    setIsSendingFeedback(true);
-    try {
-      const res = await submitContactForm({
-        name: user?.displayName || 'Portfolio Partner',
-        email: user?.email || 'guest@cfofitness.app',
-        message: feedbackMessage,
-        uid: user?.uid,
-        context: `Tier: ${entitlement.tier} | Used: ${entitlement.aiAuditsUsed}/${entitlement.freeLimit} | Equity: ${points}`,
-      });
-      if (res.success) {
-        setFeedbackMessage('');
-        toast({
-          title: 'Note Sent to Nick',
-          description: 'Thanks! Your feedback was logged and sent directly to Nick.',
-        });
-      } else {
-        toast({
-          variant: 'destructive',
-          title: 'Could Not Send Note',
-          description: res.error || 'Please try again.',
-        });
-      }
-    } finally {
-      setIsSendingFeedback(false);
-    }
-  };
-  const entitlement = resolveClientEntitlement(user, healthData);
-  const nativeShell = isNativeShell();
-
-  const handleDeleteAccount = async () => {
-    if (!user) return;
-    const confirmed = window.confirm(
-      'Permanently delete your CFO Fitness account and all logged meals, workouts, scores, and coaching history? This action cannot be undone.'
-    );
-    if (!confirmed) return;
-
-    setIsDeletingAccount(true);
-    try {
-      const idToken = await user.getIdToken();
-      const result = await deleteMyAccountAction(idToken);
-      if (result.success) {
-        toast({
-          title: 'Account Liquidated',
-          description: 'Your account and all portfolio data have been permanently deleted.',
-        });
-        await signOut(auth).catch(() => {});
-        window.location.href = '/';
-      } else {
-        toast({
-          variant: 'destructive',
-          title: 'Deletion Failed',
-          description: result.error || 'Could not delete account.',
-        });
-      }
-    } catch (err: any) {
-      toast({
-        variant: 'destructive',
-        title: 'Deletion Failed',
-        description: err?.message || 'Could not delete account.',
-      });
-    } finally {
-      setIsDeletingAccount(false);
-    }
-  };
-
-  const handleOpenBillingPortal = async () => {
-    if (!user) return;
-    setIsOpeningPortal(true);
-    try {
-      const idToken = await user.getIdToken();
-      const res = await fetch('/api/stripe/portal', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.url) {
-        window.location.href = data.url;
-        return;
-      }
-      toast({
-        variant: 'destructive',
-        title: 'Billing Portal Unavailable',
-        description: data.error || 'Could not open Stripe Customer Portal.',
-      });
-    } catch (err: any) {
-      toast({
-        variant: 'destructive',
-        title: 'Billing Portal Error',
-        description: err?.message || 'Unexpected error.',
-      });
-    } finally {
-      setIsOpeningPortal(false);
-    }
-  };
-
-  const handleDeleteNickname = async (key: string, name: string) => {
-    if (!user || !prefs) return;
-    if (!window.confirm(`Permanently liquidating ticker "${name}" from your portfolio. Proceed?`)) {
-      return;
-    }
-    setDeletingNicknameKey(key);
-    try {
-      const idToken = await user.getIdToken();
-      const res = await deleteNickname(user.uid, key, idToken);
-      if (res.success) {
-        const nextNicknames = { ...(prefs.foodNicknames || {}) };
-        delete nextNicknames[key];
-        setPrefs({ ...prefs, foodNicknames: nextNicknames });
-        toast({ title: 'Ticker Liquidated', description: `"${name}" removed from your portfolio registry.` });
-      } else {
-        toast({ variant: 'destructive', title: 'Action Failed', description: res.error || 'Could not delete ticker.' });
-      }
-    } catch (err: any) {
-      toast({ variant: 'destructive', title: 'Action Failed', description: err.message });
-    } finally {
-      setDeletingNicknameKey(null);
-    }
-  };
-
-  // Seed body comp fields once health data loads
-  const bodyCompSeededRef = useRef(false);
-  useEffect(() => {
-    if (healthData && !bodyCompSeededRef.current) {
-      bodyCompSeededRef.current = true;
-      if (healthData.heightCm)   setHeightCm(String(healthData.heightCm));
-      if (healthData.weightKg)   setWeightKg(String(healthData.weightKg));
-      if (healthData.bodyFatPct != null) setBodyFatPct(String(healthData.bodyFatPct));
-    }
-  }, [healthData]);
-
-  const handleSaveBodyComp = async () => {
-    if (!user) return;
-    const updates: Partial<import('@/lib/health-service').HealthData> = {};
-    const h = parseFloat(heightCm);
-    const w = parseFloat(weightKg);
-    const bf = parseFloat(bodyFatPct);
-    if (!isNaN(h) && h > 0)   updates.heightCm   = h;
-    if (!isNaN(w) && w > 0)   updates.weightKg   = w;
-    if (!isNaN(bf) && bf > 0 && bf < 60) updates.bodyFatPct = bf;
-    if (Object.keys(updates).length === 0) return;
-    setIsSavingBodyComp(true);
-    try {
-      await healthService.updateHealthData(db, user.uid, updates);
-      setBodyCompSavedRecently(true);
-      setTimeout(() => setBodyCompSavedRecently(false), 2000);
-    } catch (e: any) {
-      toast({ variant: 'destructive', title: 'Save Failed', description: e.message });
-    } finally {
-      setIsSavingBodyComp(false);
-    }
-  };
-
-
-  useEffect(() => {
-    if (user) {
-      healthService.getUserPreferences(db, user.uid).then((data) => {
-        setPrefs(data);
-        if (data?.weeklySchedule) {
-          try {
-            setSchedule(JSON.parse(data.weeklySchedule));
-          } catch (e) {
-            console.error("Schedule Parse Error", e);
-          }
-        }
-        isLoadedRef.current = true;
-      });
-    }
+  const userDocRef = useMemoFirebase(() => {
+    if (!user || !db) return null;
+    return doc(db, 'users', user.uid);
   }, [user, db]);
 
-  const handleSave = useCallback(async (currentPrefs: UserPreferences, currentSchedule: Record<string, string>) => {
-    if (!user || !currentPrefs) return;
-    setIsSaving(true);
+  const { data: userDoc } = useDoc<CoasterUserDoc>(userDocRef);
+
+  const [timezone, setTimezone] = useState<string>(() => {
     try {
-      const updatedPrefs = {
-        ...currentPrefs,
-        weeklySchedule: JSON.stringify(currentSchedule, null, 2)
-      };
-      await healthService.updateUserPreferences(db, user.uid, updatedPrefs);
-      setSavedRecently(true);
-      setTimeout(() => setSavedRecently(false), 2000);
-    } catch (e: any) {
-      toast({ variant: "destructive", title: "Update Failed", description: e.message });
-    } finally {
-      setIsSaving(false);
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+    } catch {
+      return 'America/New_York';
     }
-  }, [user, db, toast]);
+  });
+  const [quietEveningEnabled, setQuietEveningEnabled] = useState(false);
+  const [quietEveningHour, setQuietEveningHour] = useState('20:00');
+  const [selectedFlavors, setSelectedFlavors] = useState<string[]>([]);
+  const [loadedOutreach, setLoadedOutreach] = useState<OutreachPreferences | undefined>(undefined);
+  const [savingPrefs, setSavingPrefs] = useState(false);
 
-  // Auto-save 800ms after any change, once initial data is loaded
+  const [exportingFormat, setExportingFormat] = useState<'csv' | 'json' | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [showDeletePanel, setShowDeletePanel] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const [feedbackName, setFeedbackName] = useState('');
+  const [feedbackEmail, setFeedbackEmail] = useState('');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [sendingFeedback, setSendingFeedback] = useState(false);
+
   useEffect(() => {
-    if (!isLoadedRef.current || !prefs) return;
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(() => {
-      handleSave(prefs, schedule);
-    }, 800);
+    if (userDoc?.timezone) setTimezone(userDoc.timezone);
+    if (typeof userDoc?.quietEveningEnabled === 'boolean') {
+      setQuietEveningEnabled(userDoc.quietEveningEnabled);
+    }
+    if (userDoc?.quietEveningHour) setQuietEveningHour(userDoc.quietEveningHour);
+    if (Array.isArray(userDoc?.preferredZeroProofFlavors)) {
+      setSelectedFlavors(userDoc.preferredZeroProofFlavors);
+    }
+  }, [userDoc]);
+
+  useEffect(() => {
+    if (!user || !db) return;
+    let active = true;
+    healthService
+      .getUserPreferences(db, user.uid)
+      .then((prefs) => {
+        if (!active || !prefs) return;
+        if (prefs.outreach) {
+          setLoadedOutreach(prefs.outreach);
+          if (!userDoc?.timezone && prefs.outreach.timezone) {
+            setTimezone(prefs.outreach.timezone);
+          }
+        }
+      })
+      .catch(() => {});
     return () => {
-      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      active = false;
     };
-  }, [prefs, schedule]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user, db, userDoc?.timezone]);
 
-  const handleScheduleChange = (day: string, value: string) => {
-    setSchedule(prev => ({ ...prev, [day]: value }));
+  const timezoneList = useMemo(() => {
+    try {
+      const supported = (
+        Intl as unknown as { supportedValuesOf?: (key: string) => string[] }
+      ).supportedValuesOf?.('timeZone');
+      if (supported && supported.length > 0) return supported;
+    } catch {
+      // use fallback
+    }
+    return FALLBACK_TIMEZONES;
+  }, []);
+
+  const toggleFlavor = (flavorId: string) => {
+    setSelectedFlavors((prev) =>
+      prev.includes(flavorId) ? prev.filter((id) => id !== flavorId) : [...prev, flavorId]
+    );
   };
 
-  const addAsset = () => {
-    if (!newAsset.trim() || !prefs) return;
-    setPrefs({ ...prefs, equipment: [...prefs.equipment, newAsset.trim()] });
-    setNewAsset('');
+  const handleSavePreferences = async () => {
+    if (!user || !db) return;
+    setSavingPrefs(true);
+    try {
+      await setDoc(
+        doc(db, 'users', user.uid),
+        {
+          timezone,
+          quietEveningEnabled,
+          quietEveningHour,
+          preferredZeroProofFlavors: selectedFlavors,
+        },
+        { merge: true }
+      );
+      toast({
+        title: 'Coaster preferences saved',
+        description: 'Timezone, evening check-in, and swap tastes updated.',
+      });
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Save failed',
+        description: 'Could not update preferences right now.',
+      });
+    } finally {
+      setSavingPrefs(false);
+    }
   };
 
-  const removeAsset = (index: number) => {
-    if (!prefs) return;
-    const newEq = [...prefs.equipment];
-    newEq.splice(index, 1);
-    setPrefs({ ...prefs, equipment: newEq });
+  const handleExport = async (format: 'csv' | 'json') => {
+    if (!user || !db) return;
+    setExportingFormat(format);
+    try {
+      const snapshot = await fetchAllLedger(db, user.uid);
+      const stamp = new Date().toISOString().slice(0, 10);
+      if (format === 'csv') {
+        downloadTextFile(`coaster-ledger-${stamp}.csv`, ledgerToCSV(snapshot), 'text/csv');
+      } else {
+        downloadTextFile(
+          `coaster-ledger-${stamp}.json`,
+          ledgerToJSON(snapshot),
+          'application/json'
+        );
+      }
+      toast({ title: `Exported ${format.toUpperCase()}` });
+    } catch {
+      toast({ variant: 'destructive', title: 'Export failed' });
+    } finally {
+      setExportingFormat(null);
+    }
   };
 
-  if (!prefs) return (
-    <div className="p-6 sm:p-10 space-y-6 animate-pulse">
-      <div className="h-8 w-48 bg-muted rounded-lg mb-4" />
-      <div className="h-64 bg-muted rounded-2xl" />
-      <div className="h-48 bg-muted rounded-2xl" />
-    </div>
-  );
+  const handleDeleteAccount = async () => {
+    if (!user || deleteConfirmText.trim().toUpperCase() !== 'DELETE') return;
+    setIsDeleting(true);
+    try {
+      const idToken = await user.getIdToken(true);
+      const result = await deleteMyAccountAction(idToken);
+      if (!result.success) {
+        throw new Error(result.error || 'Account deletion failed.');
+      }
+      toast({
+        title: 'Account permanently deleted',
+        description: 'All Coaster logs and auth records have been cleared.',
+      });
+      await signOut(getAuth()).catch(() => {});
+    } catch (err: unknown) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not delete account',
+        description: err instanceof Error ? err.message : 'Please sign in again and retry.',
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleFeedbackSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!feedbackMessage.trim()) return;
+    setSendingFeedback(true);
+    try {
+      const res = await submitContactForm({
+        name: feedbackName || user?.displayName || 'Coaster User',
+        email: feedbackEmail || user?.email || '',
+        message: feedbackMessage,
+        uid: user?.uid,
+        context: 'preferences_view',
+      });
+      if (!res.success) throw new Error(res.error || 'Could not send note.');
+      setFeedbackMessage('');
+      toast({
+        title: 'Note sent',
+        description: 'Thanks for sharing feedback with the Coaster team.',
+      });
+    } catch (err: unknown) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not send note',
+        description: err instanceof Error ? err.message : 'Try again in a moment.',
+      });
+    } finally {
+      setSendingFeedback(false);
+    }
+  };
+
+  const copyUid = () => {
+    if (!user?.uid) return;
+    navigator.clipboard.writeText(user.uid);
+    toast({ title: 'User ID copied' });
+  };
 
   return (
-    <div className="p-6 sm:p-10 space-y-10 pb-24 overflow-y-auto h-full bg-background">
-      <div className="flex items-center justify-between px-1">
-        <div className="space-y-1">
-          <h2 className="text-3xl font-black tracking-tighter uppercase italic text-foreground">Portfolio Management</h2>
-          <p className="text-[12px] font-bold text-muted-foreground uppercase tracking-[0.3em]">Fixed Assets & Audit Scheduling</p>
-        </div>
-        <div className="p-4 bg-primary/10 rounded-2xl">
-          <Briefcase className="w-6 h-6 text-primary" />
-        </div>
-      </div>
-
-      {/* Bloomberg / CRT Hybrid AI Engine, SEC Insider Privacy Lock & Remote Config Telemetry */}
-      <section
-        data-testid="settings-hybrid-ai-card"
-        className="rounded-2xl border border-emerald-500/40 bg-slate-950 p-4 sm:p-6 font-mono text-emerald-300 shadow-[0_0_28px_rgba(16,185,129,0.12)] space-y-4 sm:space-y-5"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-500/25 pb-4">
-          <div className="flex items-center gap-2.5">
-            <Cpu className="w-5 h-5 text-emerald-400" />
+    <div className="space-y-6">
+      {/* 1. Coaster Rhythm & Zero-Proof Swap Preferences */}
+      <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+        <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <h3 className="text-xs font-black uppercase tracking-widest text-emerald-200">
-                HYBRID AI ENGINE // SEC PRIVACY TERMINAL
-              </h3>
-              <p className="text-[10px] text-emerald-500">
-                Firebase AI Logic Hybrid SDK (Chrome Gemini Nano + Dynamic Remote Config Cloud Routing)
-              </p>
+              <CardTitle className="text-lg font-bold text-[#1F1B18]">
+                Coaster Preferences &amp; Swap Tastes
+              </CardTitle>
+              <CardDescription className="text-xs text-[#6E6359]">
+                Tune your local clock, optional evening check-in hour, and zero-proof flavors.
+              </CardDescription>
             </div>
-          </div>
-          <span className="rounded border border-emerald-500/40 bg-emerald-950/60 px-2.5 py-1 text-[10px] font-bold uppercase">
-            {nanoStatus === 'available'
-              ? 'NANO ENGINE: ONLINE'
-              : isWarmingNano
-                ? `DOWNLOADING NANO: ${nanoDownloadPct ?? 0}%`
-                : nanoStatus === 'downloadable'
-                  ? 'NANO ENGINE: READY TO WARM'
-                  : 'CLOUD HYBRID ACTIVE'}
-          </span>
-        </div>
-
-        <div className="rounded-xl border border-emerald-500/25 bg-slate-900/80 p-4 space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-1">
-              <p className="text-xs font-bold uppercase text-emerald-200">
-                Chrome Built-in AI (`window.LanguageModel`)
-              </p>
-              <p className="text-[11px] text-emerald-400/80">
-                Pre-warms on-device Gemini Nano weights for $0.00 gas, sub-second offline Ticker Tape &amp; Receipt parsing.
-              </p>
-            </div>
-            <button
+            <Button
               type="button"
-              onClick={warmNano}
-              disabled={isWarmingNano || nanoStatus === 'available'}
-              data-testid="settings-warm-nano-btn"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400 bg-emerald-500/20 hover:bg-emerald-500/30 px-3.5 py-2 text-[11px] font-black uppercase tracking-wider text-emerald-200 transition-colors disabled:opacity-50"
+              size="sm"
+              disabled={savingPrefs}
+              onClick={handleSavePreferences}
+              className="rounded-full bg-[#1F1B18] hover:bg-[#352F2A] text-[#FAF6F0] text-xs font-bold px-4"
             >
-              {isWarmingNano ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {savingPrefs ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
               ) : (
-                <Zap className="w-3.5 h-3.5 text-emerald-400" />
+                <Check className="w-3.5 h-3.5 mr-1.5" />
               )}
-              <span>
-                {nanoStatus === 'available'
-                  ? 'NANO ENGINE: ONLINE'
-                  : isWarmingNano
-                    ? `DOWNLOADING NANO: ${nanoDownloadPct ?? 0}%`
-                    : 'WARM LOCAL NANO ENGINE'}
-              </span>
-            </button>
+              Save
+            </Button>
+          </div>
+        </CardHeader>
+
+        <CardContent className="pt-5 space-y-6">
+          {/* Timezone */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold uppercase tracking-wider text-[#6E6359] flex items-center gap-1.5">
+              <Globe className="w-3.5 h-3.5 text-[#C26D2D]" />
+              Local Timezone
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value)}
+                className="flex-1 h-10 px-3 rounded-xl bg-[#FAF6F0] border border-[#E8DFD1] text-sm font-medium text-[#1F1B18]"
+              >
+                {timezoneList.map((tz) => (
+                  <option key={tz} value={tz}>
+                    {tz}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  try {
+                    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    if (detected) setTimezone(detected);
+                  } catch {
+                    // ignore
+                  }
+                }}
+                className="h-10 border-[#E8DFD1] bg-[#FAF6F0] text-xs font-semibold text-[#1F1B18]"
+              >
+                Use device timezone
+              </Button>
+            </div>
           </div>
 
-          {(isWarmingNano || nanoDownloadPct !== null) && (
-            <div className="space-y-1">
-              <div className="h-2 w-full rounded bg-black overflow-hidden border border-emerald-500/30">
-                <div
-                  className="h-full bg-emerald-400 transition-all duration-200"
-                  style={{ width: `${nanoDownloadPct ?? 0}%` }}
-                />
+          {/* Quiet Evening Hour Reminder */}
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Bell className="w-4 h-4 text-[#C26D2D]" />
+                <span className="text-sm font-bold text-[#1F1B18]">
+                  Quiet Evening Coaster Nudge
+                </span>
               </div>
-              <p className="text-[10px] text-amber-300">
-                {nanoStatus === 'available'
-                  ? 'NANO ENGINE: ONLINE — On-device inference verified.'
-                  : `DOWNLOADING NANO: ${nanoDownloadPct ?? 0}%`}
+              <p className="text-xs text-[#6E6359]">
+                Optional gentle evening check-in hour to wrap up today&apos;s pours or tap Clear Day.
               </p>
             </div>
-          )}
 
-          {warmNanoError && (
-            <p className="text-[10px] text-amber-300 border border-amber-500/30 bg-amber-950/30 rounded px-2.5 py-1.5">
-              {warmNanoError}
-            </p>
-          )}
-        </div>
+            <div className="flex items-center gap-3 shrink-0">
+              {quietEveningEnabled && (
+                <select
+                  value={quietEveningHour}
+                  onChange={(e) => setQuietEveningHour(e.target.value)}
+                  aria-label="Preferred quiet evening reminder hour"
+                  className="h-9 px-2.5 rounded-xl bg-[#FFFDF9] border border-[#E8DFD1] text-xs font-bold text-[#1F1B18]"
+                >
+                  {EVENING_HOURS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <Switch
+                checked={quietEveningEnabled}
+                onCheckedChange={setQuietEveningEnabled}
+                aria-label="Toggle quiet evening coaster reminder"
+              />
+            </div>
+          </div>
 
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-emerald-500/25 bg-slate-900/80 p-4">
-          <div className="space-y-1">
-            <p className="text-xs font-bold uppercase text-emerald-200 flex items-center gap-1.5">
-              <Lock className="w-3.5 h-3.5 text-emerald-400" />
-              SEC PRIVACY LOCK (STRICT ON-DEVICE)
+          {/* Zero-Proof Swap Taste Profile */}
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-[#3F7D58]" />
+              <span className="text-xs font-bold uppercase tracking-wider text-[#6E6359]">
+                Zero-Proof Swap Taste Preferences
+              </span>
+            </div>
+            <p className="text-xs text-[#6E6359]">
+              Pick flavor profiles Sunny should prioritize when suggesting alcohol-free pairings.
             </p>
-            <p className="text-[11px] text-emerald-400/80 leading-relaxed">
-              Enforces <code className="text-amber-300">InferenceMode.ONLY_ON_DEVICE</code> across biometric audits, Ticker Tape parsing, and Meal Photo Receipts so raw personal health data never leaves this browser.
-            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {ZERO_PROOF_TASTE_OPTIONS.map((opt) => {
+                const active = selectedFlavors.includes(opt.id);
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => toggleFlavor(opt.id)}
+                    className={`rounded-2xl border px-3.5 py-2.5 text-left transition-colors ${
+                      active
+                        ? 'bg-[#3F7D58]/12 border-[#3F7D58] text-[#1F1B18]'
+                        : 'bg-[#FAF6F0] border-[#E8DFD1] hover:border-[#C26D2D]/50 text-[#1F1B18]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold">{opt.label}</span>
+                      {active && <Check className="w-3.5 h-3.5 text-[#3F7D58]" />}
+                    </div>
+                    <p className="text-[11px] text-[#6E6359] mt-0.5">{opt.hint}</p>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <Switch
-            checked={secPrivacyLock}
-            onCheckedChange={setSecPrivacyLock}
-            data-testid="settings-sec-lock-switch"
-          />
-        </div>
+        </CardContent>
+      </Card>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 text-[10px]">
-          <div className="rounded-lg border border-emerald-500/20 bg-black/50 p-2.5">
-            <p className="text-emerald-600 uppercase">RC Cloud Model</p>
-            <p className="font-bold text-amber-300 mt-0.5 truncate">{remoteConfig.cfoCloudModel}</p>
-          </div>
-          <div className="rounded-lg border border-emerald-500/20 bg-black/50 p-2.5">
-            <p className="text-emerald-600 uppercase">RC Persona Strictness</p>
-            <p className="font-bold text-emerald-200 mt-0.5 truncate">{remoteConfig.cfoPersonaStrictness}</p>
-          </div>
-          <div className="rounded-lg border border-emerald-500/20 bg-black/50 p-2.5">
-            <p className="text-emerald-600 uppercase">RC Default Mode</p>
-            <p className="font-bold text-emerald-200 mt-0.5 truncate">{remoteConfig.hybridDefaultMode}</p>
-          </div>
-          <div className="rounded-lg border border-emerald-500/20 bg-black/50 p-2.5">
-            <p className="text-emerald-600 uppercase">App Check &amp; Network</p>
-            <p className="font-bold text-emerald-200 mt-0.5 truncate">
-              {appCheck.status.toUpperCase()} · {isOnline ? 'ONLINE' : 'OFFLINE'}
-            </p>
-          </div>
-        </div>
+      {/* 2. Email Companion Link */}
+      <OutreachSettingsCard user={user} initialOutreach={loadedOutreach} />
 
-        {recentReceipts.length > 0 && (
-          <div className="space-y-1.5 pt-1">
-            <p className="text-[10px] uppercase tracking-wider text-emerald-500 font-bold">
-              Recent Hybrid Execution Receipts
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {recentReceipts.slice(0, 4).map((r) => (
+      {/* 3. Hybrid AI & Privacy Vault */}
+      <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+        <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base font-bold text-[#1F1B18] flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-[#C26D2D]" />
+                Hybrid AI &amp; Privacy Vault
+              </CardTitle>
+              <CardDescription className="text-xs text-[#6E6359]">
+                Run pour notes on-device with Gemini Nano when supported, or lock inference locally.
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              <span
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border ${
+                  isOnline
+                    ? 'bg-[#3F7D58]/10 border-[#3F7D58]/25 text-[#3F7D58]'
+                    : 'bg-[#C26D2D]/10 border-[#C26D2D]/25 text-[#C26D2D]'
+                }`}
+              >
+                {isOnline ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                {isOnline ? 'Online' : 'Offline'}
+              </span>
+              {appCheck?.status && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#FAF6F0] border border-[#E8DFD1] text-[#6E6359]">
+                  <ShieldCheck className="w-3 h-3 text-[#3F7D58]" />
+                  Verified
+                </span>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent className="pt-4 space-y-4">
+          <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-[#3F7D58]" />
+                <span className="text-sm font-bold text-[#1F1B18]">
+                  Strict Privacy Vault (ONLY_ON_DEVICE)
+                </span>
+              </div>
+              <p className="text-xs text-[#6E6359]">
+                When locked, Sunny never sends drink prompts or notes to cloud endpoints.
+              </p>
+            </div>
+            <Switch
+              checked={secPrivacyLock}
+              onCheckedChange={setSecPrivacyLock}
+              aria-label="Toggle Strict Privacy Vault"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-[#FAF6F0] border border-[#E8DFD1] rounded-2xl p-3.5">
+            <div className="space-y-0.5">
+              <p className="font-bold text-[#1F1B18]">
+                On-Device Engine: <span className="text-[#C26D2D]">{nanoStatus}</span>
+              </p>
+              <p className="text-[#6E6359]">
+                Default routing: {remoteConfig?.hybridDefaultMode || 'PREFER_ON_DEVICE'}
+                {nanoDownloadPct !== null && nanoDownloadPct > 0 && nanoDownloadPct < 100
+                  ? ` • Downloading ${nanoDownloadPct}%`
+                  : ''}
+              </p>
+              {warmNanoError && (
+                <p className="text-[11px] text-[#C26D2D]">{warmNanoError}</p>
+              )}
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={isWarmingNano}
+              onClick={() => warmNano()}
+              className="border-[#E8DFD1] bg-[#FFFDF9] text-xs font-bold text-[#1F1B18]"
+            >
+              {isWarmingNano && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              Warm Local Model
+            </Button>
+          </div>
+
+          {recentReceipts.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              {recentReceipts.slice(-4).map((r, i) => (
                 <ExecutionReceiptBadge
-                  key={r.id}
-                  compact
+                  key={r.id || i}
                   inferenceSource={r.inferenceSource}
                   latencyMs={r.latencyMs}
                 />
               ))}
             </div>
-          </div>
-        )}
-      </section>
-
-      {/* Rank / Leveling Card */}
-      {(() => {
-        const rank = getRank(points);
-        const rankIdx = RANKS.indexOf(rank as typeof RANKS[number]);
-        const nextRank = rankIdx < RANKS.length - 1 ? RANKS[rankIdx + 1] : null;
-
-        // Numeric level: every 3000 pts = 1 level. Level 1 = 0-2999, Level 2 = 3000-5999, etc.
-        const LEVEL_STEP = 3000;
-        const level = Math.floor(Math.max(0, points) / LEVEL_STEP) + 1;
-        const levelBase = (level - 1) * LEVEL_STEP;
-        const levelProgressPct = Math.min(100, Math.round(((points - levelBase) / LEVEL_STEP) * 100));
-        const ptsToNextLevel = LEVEL_STEP - (points - levelBase);
-        // First 1000 milestone within Level 1
-        const hit1kMilestone = points >= 1000;
-        const show1kBadge = level === 1; // only relevant in level 1
-        return (
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <Trophy className="w-4 h-4" />
-                Portfolio Rank
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-4 space-y-5">
-              {/* Current rank + level display */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`p-3 ${rank.bg} rounded-xl relative`}>
-                    <Trophy className={`w-5 h-5 ${rank.color}`} />
-                    <span className="absolute -top-1.5 -right-1.5 text-[9px] font-black bg-primary text-white rounded-full px-1.5 py-0.5 leading-none">
-                      L{level}
-                    </span>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className={`text-lg font-black uppercase tracking-tight ${rank.color}`}>{rank.label}</p>
-                      <span className="text-[10px] font-black text-muted-foreground/60 bg-muted rounded px-1.5 py-0.5">LVL {level}</span>
-                    </div>
-                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-                      {points.toLocaleString()} pts · {ptsToNextLevel.toLocaleString()} to Level {level + 1}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Level progress bar with 1K milestone marker */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-[9px] font-black uppercase tracking-widest text-muted-foreground">
-                  <span>Level {level}</span>
-                  <span>Level {level + 1} at {((level) * LEVEL_STEP).toLocaleString()} pts</span>
-                </div>
-                <div className="relative">
-                  <Progress value={levelProgressPct} className="h-2" />
-                  {/* 1K milestone tick within Level 1 */}
-                  {show1kBadge && (
-                    <div className="absolute top-0 h-2" style={{ left: `${(1000 / LEVEL_STEP) * 100}%` }}>
-                      <div className={`w-0.5 h-full ${hit1kMilestone ? 'bg-violet-500' : 'bg-muted-foreground/30'}`} />
-                    </div>
-                  )}
-                </div>
-                {show1kBadge && (
-                  <p className={`text-[9px] font-bold ${hit1kMilestone ? 'text-violet-500' : 'text-muted-foreground/60'}`}>
-                    {hit1kMilestone ? '✓ 1K Milestone reached' : `1K Milestone at 1,000 pts · ${(1000 - points).toLocaleString()} away`}
-                  </p>
-                )}
-              </div>
-
-              {/* Prestige tier ladder */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 pt-1">
-                {RANKS.map((r) => (
-                  r.max === Infinity ? null :
-                  <div key={r.label} className={`p-2 rounded-lg text-center border ${points >= r.min ? `${r.bg} border-transparent` : 'border-dashed border-muted-foreground/20 opacity-40'}`}>
-                    <p className={`text-[9px] font-black uppercase tracking-wider ${points >= r.min ? r.color : 'text-muted-foreground'}`}>{r.label}</p>
-                    <p className="text-[8px] text-muted-foreground font-bold">{r.min.toLocaleString()}+</p>
-                  </div>
-                ))}
-                <div key="Partner" className={`p-2 rounded-lg text-center border ${points >= 10000 ? 'bg-emerald-100 border-transparent' : 'border-dashed border-muted-foreground/20 opacity-40'}`}>
-                  <p className={`text-[9px] font-black uppercase tracking-wider ${points >= 10000 ? 'text-emerald-600' : 'text-muted-foreground'}`}>Partner</p>
-                  <p className="text-[8px] text-muted-foreground font-bold">10,000+</p>
-                </div>
-              </div>
-
-              {/* Equity is derived, never set. Every point traces to a scored
-                  day in the ledger — see score-backfill.ts, which rebuilds the
-                  running total from history. There is deliberately no manual
-                  override here: a rank you can type in is not a rank. */}
-              <div className="border-t pt-4">
-                <p className="text-[9px] text-muted-foreground italic">
-                  Equity is the running total of every day you have scored. It is calculated
-                  from your ledger, so it always starts at zero and only moves when a day does.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })()}
-
-      {/* AI CFO Retainer & Membership Status */}
-      <PaywallModal
-        isOpen={paywallOpen}
-        onClose={() => setPaywallOpen(false)}
-        auditsUsed={entitlement.aiAuditsUsed}
-        freeLimit={entitlement.freeLimit}
-      />
-      <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-        <CardHeader className="p-6 pb-2">
-          <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-            <ShieldCheck className="w-4 h-4 text-primary" />
-            AI CFO Membership & Retainer
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-6 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Badge className={entitlement.isExempt ? "bg-emerald-600 text-white font-black uppercase text-[10px]" : "bg-primary/10 text-primary font-black uppercase text-[10px] border-none"}>
-                {entitlement.badgeLabel}
-              </Badge>
-              {entitlement.tier === 'founder' && (
-                <span className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Founder Immunity Active</span>
-              )}
-            </div>
-            <p className="text-xs font-medium text-muted-foreground">
-              {entitlement.isExempt
-                ? "Unlimited multimodal AI Coach, Voice Dictation, and Ledger Analyst access. Zero paywall restrictions."
-                : `${entitlement.remainingFreeAudits ?? entitlement.freeLimit} of ${entitlement.freeLimit} complimentary AI Coach audits remaining. The Zero-AI Cockpit (Metrics, 3-Day Nutritionist, Alpert Number, History) is 100% free forever.`}
-            </p>
-          </div>
-          {healthData?.stripeCustomerId && !nativeShell && (
-            <Button
-              variant="outline"
-              onClick={handleOpenBillingPortal}
-              disabled={isOpeningPortal}
-              className="rounded-xl font-black uppercase tracking-wider text-xs shrink-0 gap-2"
-            >
-              {isOpeningPortal ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-              Manage / Cancel in 1 Click
-            </Button>
           )}
-          {!entitlement.isExempt && (
-            <Button
-              onClick={() => setPaywallOpen(true)}
-              className="rounded-xl font-black uppercase tracking-wider text-xs shrink-0 gap-2"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              {nativeShell ? 'Enter Partner / Access Code' : 'Retain AI CFO / Enter Code'}
-            </Button>
-          )}
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleShareGiftCredits}
-            className="rounded-xl font-black uppercase tracking-wider text-xs shrink-0 gap-2 border-emerald-600/30 text-emerald-700 hover:bg-emerald-50"
-          >
-            {copiedGiftLink ? <Check className="w-3.5 h-3.5" /> : <Share2 className="w-3.5 h-3.5" />}
-            {copiedGiftLink ? 'Copied Credit Link!' : 'Gift 25 Free Credits'}
-          </Button>
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-        {/* Left Column: Schedule */}
-        <div className="lg:col-span-7 space-y-8">
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <Calendar className="w-4 h-4" />
-                Weekly Audit Schedule
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {DAYS.map((day) => (
-                  <div key={day} className="space-y-2 group">
-                    <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest px-1 flex items-center justify-between">
-                      {day}
-                      <span className="w-1 h-1 bg-primary/20 rounded-full group-focus-within:bg-primary transition-colors" />
-                    </Label>
-                    <Input 
-                      placeholder="Activity (e.g. Lift)" 
-                      value={schedule[day] || ''}
-                      onChange={(e) => handleScheduleChange(day, e.target.value)}
-                      className="bg-white/50 border-muted-foreground/10 focus:bg-white h-10 text-sm font-bold italic"
-                    />
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+      {/* 4. Shared Coaster Links */}
+      <MySharesSection />
 
-        {/* Right Column: Assets & Targets */}
-        <div className="lg:col-span-5 space-y-8">
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <Construction className="w-4 h-4" />
-                Home Equipment Assets
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-4 space-y-6">
-              <div className="flex flex-wrap gap-2 min-h-[40px]">
-                {prefs.equipment.length > 0 ? (
-                  prefs.equipment.map((asset, i) => (
-                    <Badge key={i} variant="secondary" className="gap-2 pr-1.5 py-1.5 pl-3 rounded-lg bg-primary/5 hover:bg-primary/10 text-primary border-none shadow-sm transition-all group">
-                      <span className="text-xs font-black uppercase tracking-tighter">{asset}</span>
-                      <X className="w-3.5 h-3.5 cursor-pointer hover:text-destructive text-muted-foreground transition-colors" onClick={() => removeAsset(i)} />
-                    </Badge>
-                  ))
-                ) : (
-                  <p className="text-xs text-muted-foreground italic">No assets registered in the warehouse.</p>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Input 
-                  placeholder="Add asset (e.g. 55lb KB)" 
-                  value={newAsset} 
-                  onChange={(e) => setNewAsset(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && addAsset()}
-                  className="h-10 text-sm bg-white/50 border-muted-foreground/10"
-                />
-                <Button size="icon" className="h-10 w-10 shrink-0 rounded-xl" onClick={addAsset}>
-                  <Plus className="w-4 h-4" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+      {/* 5. Data Export & Account Deletion */}
+      <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+        <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+          <CardTitle className="text-base font-bold text-[#1F1B18]">
+            Your Data &amp; Account
+          </CardTitle>
+          <CardDescription className="text-xs text-[#6E6359]">
+            Download your full Coaster ledger anytime or permanently erase your account.
+          </CardDescription>
+        </CardHeader>
 
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <Target className="w-4 h-4" />
-                Portfolio Targets
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-4 space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <Label className="text-[10px] uppercase font-black text-muted-foreground tracking-widest px-1">Protein Goal (g)</Label>
-                  <Input 
-                    type="number" 
-                    value={prefs.targets.proteinGoal}
-                    onChange={(e) => setPrefs({ ...prefs, targets: { ...prefs.targets, proteinGoal: Number(e.target.value) } })}
-                    className="h-10 text-sm font-black bg-white/50 border-muted-foreground/10"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-[10px] uppercase font-black text-muted-foreground tracking-widest px-1">VF Points Goal</Label>
-                  <Input 
-                    type="number" 
-                    value={prefs.targets.fatPointsGoal}
-                    onChange={(e) => setPrefs({ ...prefs, targets: { ...prefs.targets, fatPointsGoal: Number(e.target.value) } })}
-                    className="h-10 text-sm font-black bg-white/50 border-muted-foreground/10"
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Body Composition */}
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <Activity className="w-4 h-4" />
-                Body Composition
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-4 space-y-4">
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] uppercase font-black text-muted-foreground tracking-widest px-1">Height (cm)</Label>
-                  <Input
-                    type="number"
-                    placeholder="e.g. 178"
-                    value={heightCm}
-                    onChange={e => setHeightCm(e.target.value)}
-                    className="h-10 text-sm font-black bg-white/50 border-muted-foreground/10"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] uppercase font-black text-muted-foreground tracking-widest px-1">Weight (kg)</Label>
-                  <Input
-                    type="number"
-                    placeholder="e.g. 82"
-                    value={weightKg}
-                    onChange={e => setWeightKg(e.target.value)}
-                    className="h-10 text-sm font-black bg-white/50 border-muted-foreground/10"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] uppercase font-black text-muted-foreground tracking-widest px-1">Body Fat %</Label>
-                  <Input
-                    type="number"
-                    placeholder="e.g. 18"
-                    value={bodyFatPct}
-                    onChange={e => setBodyFatPct(e.target.value)}
-                    className="h-10 text-sm font-black bg-white/50 border-muted-foreground/10"
-                  />
-                </div>
-              </div>
-              <p className="text-[9px] text-muted-foreground italic leading-relaxed">
-                Body fat % drives your Alpert Number &amp; glycogen reserve math. Best measured via{' '}
-                <a
-                  href={process.env.NEXT_PUBLIC_BODYSPEC_REFERRAL_URL || 'https://www.bodyspec.com'}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary font-bold underline hover:opacity-80 not-italic"
-                >
-                  BodySpec DEXA Scan →
-                </a>{' '}
-                or set via coach chat.
-              </p>
+        <CardContent className="pt-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-2">
               <Button
-                onClick={handleSaveBodyComp}
-                disabled={isSavingBodyComp}
-                className="w-full h-10 rounded-xl font-black uppercase tracking-widest text-xs"
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={exportingFormat !== null}
+                onClick={() => handleExport('csv')}
+                className="border-[#E8DFD1] bg-[#FAF6F0] text-xs font-semibold text-[#1F1B18]"
               >
-                {isSavingBodyComp ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : bodyCompSavedRecently ? <Check className="w-4 h-4 mr-2" /> : null}
-                {isSavingBodyComp ? 'Saving…' : bodyCompSavedRecently ? 'Saved' : 'Save Body Comp'}
+                <Download className="w-3.5 h-3.5 mr-1.5" />
+                Export CSV
               </Button>
-            </CardContent>
-          </Card>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={exportingFormat !== null}
+                onClick={() => handleExport('json')}
+                className="border-[#E8DFD1] bg-[#FAF6F0] text-xs font-semibold text-[#1F1B18]"
+              >
+                <Download className="w-3.5 h-3.5 mr-1.5" />
+                Export JSON
+              </Button>
+            </div>
 
-          {/* Coach Settings */}
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <MessageSquare className="w-4 h-4" />
-                Coach Settings
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-4 space-y-5">
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <p className="text-sm font-black uppercase tracking-tight text-foreground">Auto-Brief</p>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-                    Start coaching session automatically when you open the Coach tab (Off by default to save Gemini API calls)
-                  </p>
-                </div>
-                <Switch
-                  checked={prefs.autoChatEnabled ?? false}
-                  onCheckedChange={(checked) => setPrefs({ ...prefs, autoChatEnabled: checked })}
-                />
-              </div>
+            {user?.uid && (
+              <button
+                type="button"
+                onClick={copyUid}
+                className="inline-flex items-center gap-1.5 text-[11px] font-mono text-[#6E6359] hover:text-[#1F1B18]"
+              >
+                <span>ID: {user.uid.slice(0, 10)}…</span>
+                <Copy className="w-3 h-3" />
+              </button>
+            )}
+          </div>
 
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1 min-w-0">
-                  <p className="text-sm font-black uppercase tracking-tight text-foreground">Economy AI Model (Flash-Lite)</p>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-                    Use Gemini 2.5 Flash-Lite for chat (~75% lower API token cost per message)
-                  </p>
-                </div>
-                <Switch
-                  checked={(prefs.aiModelTier ?? 'flash') === 'flash-lite'}
-                  onCheckedChange={(checked) =>
-                    setPrefs({ ...prefs, aiModelTier: checked ? 'flash-lite' : 'flash' })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1 min-w-0">
-                  <p className="text-sm font-black uppercase tracking-tight text-foreground">Preachy Mode</p>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-                    When off, the coach logs alcohol and desserts as data without volunteering commentary
-                  </p>
-                </div>
-                <Switch
-                  checked={prefs.preachyMode ?? true}
-                  onCheckedChange={(checked) => setPrefs({ ...prefs, preachyMode: checked })}
-                />
-              </div>
-
-            </CardContent>
-          </Card>
-
-          {/* Advanced Tracking — opt-in / out for each dashboard card. */}
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <Sliders className="w-4 h-4" />
-                Advanced Tracking
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-4 space-y-5">
-              <p className="text-[10px] font-medium text-muted-foreground leading-relaxed">
-                Show or hide individual sections of the Today dashboard. Steps Inventory, Portfolio Weight, and the Fat Burn Index score always stay visible.
-              </p>
-
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1 min-w-0">
-                  <p className="text-sm font-black uppercase tracking-tight text-foreground">Advanced Metabolic</p>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-                    Glycogen reservoir + fat-burned-vs-lean charts. Caloric burn stays either way.
-                  </p>
-                </div>
-                <Switch
-                  checked={prefs.display?.showAdvancedMetabolic ?? true}
-                  onCheckedChange={(checked) =>
-                    setPrefs({ ...prefs, display: { ...prefs.display, showAdvancedMetabolic: checked } })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1 min-w-0">
-                  <p className="text-sm font-black uppercase tracking-tight text-foreground">Protein Liquidity</p>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-                    Daily protein progress card.
-                  </p>
-                </div>
-                <Switch
-                  checked={prefs.display?.showProtein ?? true}
-                  onCheckedChange={(checked) =>
-                    setPrefs({ ...prefs, display: { ...prefs.display, showProtein: checked } })
-                  }
-                />
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="space-y-1 min-w-0">
-                    <p className="text-sm font-black uppercase tracking-tight text-foreground">Plant Matter</p>
-                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-                      Starrett 800g protocol — fruits + vegetables by raw weight.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={prefs.display?.showPlantMatter ?? false}
-                    onCheckedChange={(checked) =>
-                      setPrefs({ ...prefs, display: { ...prefs.display, showPlantMatter: checked } })
-                    }
-                  />
-                </div>
-                {(prefs.display?.showPlantMatter ?? false) && (
-                  <div className="flex items-center gap-3 pl-1">
-                    <Label htmlFor="plant-goal" className="text-[10px] uppercase font-black text-muted-foreground tracking-widest">
-                      Daily target
-                    </Label>
-                    <Input
-                      id="plant-goal"
-                      type="number"
-                      min={100}
-                      max={2000}
-                      step={50}
-                      value={prefs.targets?.plantGoalG ?? 800}
-                      onChange={(e) => {
-                        const v = parseInt(e.target.value, 10);
-                        if (Number.isNaN(v)) return;
-                        setPrefs({
-                          ...prefs,
-                          targets: { ...prefs.targets, plantGoalG: v },
-                        });
-                      }}
-                      className="h-8 w-24 text-sm font-black"
-                    />
-                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">grams</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1 min-w-0">
-                  <p className="text-sm font-black uppercase tracking-tight text-foreground">Recovery Audit</p>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-                    HRV-based recovery card.
-                  </p>
-                </div>
-                <Switch
-                  checked={prefs.display?.showRecovery ?? true}
-                  onCheckedChange={(checked) =>
-                    setPrefs({ ...prefs, display: { ...prefs.display, showRecovery: checked } })
-                  }
-                />
-              </div>
-
-              <div className="flex items-center justify-between gap-4">
-                <div className="space-y-1 min-w-0">
-                  <p className="text-sm font-black uppercase tracking-tight text-foreground">VF Equity Score</p>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest leading-relaxed">
-                    Long-term visceral-fat-reduction points panel.
-                  </p>
-                </div>
-                <Switch
-                  checked={prefs.display?.showVfScore ?? true}
-                  onCheckedChange={(checked) =>
-                    setPrefs({ ...prefs, display: { ...prefs.display, showVfScore: checked } })
-                  }
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Ticker Book (My Nicknames) Card */}
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                  <Tag className="w-4 h-4" />
-                  Ticker Book (My Nicknames)
-                </CardTitle>
-                <Badge variant="secondary" className="text-[10px] font-mono font-bold tracking-tight">
-                  {Object.keys(prefs.foodNicknames || {}).length} Tickers Filed
-                </Badge>
-              </div>
-              <p className="text-[11px] font-medium text-muted-foreground mt-1">
-                Custom meal tickers created by the CFO. Say any ticker name in chat to log instantly.
-              </p>
-            </CardHeader>
-            <CardContent className="p-6 pt-2 space-y-4">
-              {/* Search & Filter Bar */}
-              <div className="flex flex-col sm:flex-row gap-2">
-                <div className="relative flex-1">
-                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    placeholder="Search tickers or ingredients..."
-                    value={nicknameSearch}
-                    onChange={(e) => setNicknameSearch(e.target.value)}
-                    className="pl-8 h-9 text-xs"
-                  />
-                  {nicknameSearch && (
-                    <button
-                      onClick={() => setNicknameSearch('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-                <div className="flex gap-1 overflow-x-auto pb-1 sm:pb-0">
-                  {(['all', 'breakfast', 'lunch', 'dinner', 'snack'] as const).map((meal) => (
-                    <Button
-                      key={meal}
-                      variant={nicknameMealFilter === meal ? 'default' : 'outline'}
-                      size="sm"
-                      onClick={() => setNicknameMealFilter(meal)}
-                      className="h-9 px-2.5 text-[10px] uppercase font-black tracking-wider shrink-0"
-                    >
-                      {meal}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Ticker Cards Grid */}
-              {(() => {
-                const nicknamesMap = prefs.foodNicknames || {};
-                const entries = Object.entries(nicknamesMap);
-
-                const filtered = entries.filter(([key, item]) => {
-                  if (nicknameMealFilter !== 'all' && item.meal !== nicknameMealFilter) return false;
-                  if (!nicknameSearch.trim()) return true;
-                  const q = nicknameSearch.toLowerCase();
-                  const nameMatch = (item.nickname || key).toLowerCase().includes(q);
-                  const descMatch = item.description?.toLowerCase().includes(q);
-                  const itemMatch = item.items?.some((i) => i.toLowerCase().includes(q));
-                  return nameMatch || descMatch || itemMatch;
-                });
-
-                // Sort: meal group, then alphabetical
-                const mealOrder: Record<string, number> = { breakfast: 1, lunch: 2, dinner: 3, snack: 4 };
-                filtered.sort(([k1, a], [k2, b]) => {
-                  const orderA = mealOrder[a.meal] ?? 99;
-                  const orderB = mealOrder[b.meal] ?? 99;
-                  if (orderA !== orderB) return orderA - orderB;
-                  return (a.nickname || k1).localeCompare(b.nickname || k2);
-                });
-
-                if (entries.length === 0) {
-                  return (
-                    <div className="text-center py-8 px-4 border border-dashed rounded-xl bg-muted/20">
-                      <Utensils className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
-                      <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider">No Tickers Filed Yet</p>
-                      <p className="text-[11px] text-muted-foreground/70 mt-1 max-w-sm mx-auto">
-                        When you log distinctive meals, the CFO will proactively propose Wall Street nicknames to file in your ledger.
-                      </p>
-                    </div>
-                  );
-                }
-
-                if (filtered.length === 0) {
-                  return (
-                    <div className="text-center py-6 text-xs text-muted-foreground">
-                      No tickers matching &quot;{nicknameSearch}&quot;.
-                    </div>
-                  );
-                }
-
-                return (
-                  <div className="max-h-[440px] overflow-y-auto pr-1">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                      {filtered.map(([key, item]) => {
-                        const mealBadgeStyles: Record<string, string> = {
-                          breakfast: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
-                          lunch: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
-                          dinner: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300',
-                          snack: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
-                        };
-
-                        const isDeleting = deletingNicknameKey === key;
-
-                        return (
-                          <div
-                            key={key}
-                            className="p-3.5 rounded-xl bg-muted/25 border hover:border-primary/30 transition-all flex flex-col justify-between gap-2.5 relative group"
-                          >
-                            <div className="space-y-1">
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="space-y-0.5 min-w-0">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <h4 className="text-xs font-black text-foreground tracking-tight truncate">
-                                      {item.nickname || key}
-                                    </h4>
-                                    <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded tracking-wider ${mealBadgeStyles[item.meal] || 'bg-muted text-muted-foreground'}`}>
-                                      {item.meal}
-                                    </span>
-                                  </div>
-                                </div>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  onClick={() => handleDeleteNickname(key, item.nickname || key)}
-                                  disabled={isDeleting}
-                                  className="h-6 w-6 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 shrink-0"
-                                  title="Liquidate Ticker"
-                                >
-                                  {isDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                                </Button>
-                              </div>
-
-                              {item.description && (
-                                <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
-                                  {item.description}
-                                </p>
-                              )}
-                            </div>
-
-                            <div className="space-y-1.5 pt-1 border-t border-border/40">
-                              {/* Macro summary pill bar */}
-                              <div className="flex items-center gap-2 text-[10px] font-mono font-bold flex-wrap">
-                                <span className="text-foreground">{item.totalCalories ?? 0} kcal</span>
-                                <span className="text-muted-foreground">·</span>
-                                <span className="text-blue-600 dark:text-blue-400 font-bold">{item.totalProteinG ?? 0}g P</span>
-                                <span className="text-muted-foreground">·</span>
-                                <span className="text-amber-600 dark:text-amber-400">{item.totalCarbsG ?? 0}g C</span>
-                                <span className="text-muted-foreground">·</span>
-                                <span className="text-red-500/80">{item.totalFatG ?? 0}g F</span>
-                              </div>
-
-                              {/* Items tags preview */}
-                              {item.items && item.items.length > 0 && (
-                                <div className="flex items-center gap-1 flex-wrap pt-0.5">
-                                  {item.items.slice(0, 3).map((it, i) => (
-                                    <span key={i} className="text-[9px] bg-background/80 px-1.5 py-0.5 rounded border text-muted-foreground truncate max-w-[110px]">
-                                      {it}
-                                    </span>
-                                  ))}
-                                  {item.items.length > 3 && (
-                                    <span className="text-[9px] text-muted-foreground font-mono">
-                                      +{item.items.length - 3} more
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })()}
-            </CardContent>
-          </Card>
-
-          {/* Automated Free 3x/Day Email & Discord Briefings */}
-          <OutreachSettingsCard user={user} initialOutreach={prefs?.outreach} />
-
-          {/* Direct Feedback Loop to Founder (Nick) */}
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <MessageSquare className="w-4 h-4 text-primary" />
-                Direct Line to Nick (Feedback &amp; Bugs)
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-3">
-              <form onSubmit={handleSendFeedback} className="space-y-3">
-                <p className="text-xs text-muted-foreground">
-                  Spot a bug, a weird macro estimate, or have an idea? Send a note straight to Nick&apos;s inbox.
+          <div className="pt-3 border-t border-[#E8DFD1]/70">
+            {!showDeletePanel ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setShowDeletePanel(true)}
+                className="text-xs font-semibold text-[#6E6359] hover:text-[#C26D2D] px-0"
+              >
+                <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                Permanently delete my account &amp; logs
+              </Button>
+            ) : (
+              <div className="rounded-2xl bg-[#FAF6F0] border border-[#C26D2D]/35 p-4 space-y-3">
+                <p className="text-xs font-bold text-[#1F1B18]">
+                  This erases every pour log, preference, share link, and login record permanently.
                 </p>
-                <Textarea
-                  placeholder="Tell Nick what worked, what broke, or what you wish the CFO did..."
-                  value={feedbackMessage}
-                  onChange={(e) => setFeedbackMessage(e.target.value)}
-                  className="min-h-[80px] text-xs bg-white/60"
-                />
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={isSendingFeedback || !feedbackMessage.trim()}
-                  className="rounded-xl font-black uppercase tracking-wider text-xs gap-2"
-                >
-                  {isSendingFeedback ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                  Send Note to Nick
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-
-          {/* Internal Audit / Database Reference Section */}
-          <Card className="border-none shadow-lg bg-white/70 backdrop-blur-sm ring-1 ring-primary/5 border-dashed border-2">
-            <CardHeader className="p-6 pb-2">
-              <CardTitle className="text-[12px] font-black uppercase text-muted-foreground flex items-center gap-3 tracking-widest">
-                <Fingerprint className="w-4 h-4" />
-                Database Ref (Internal Audit)
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6 pt-2">
-              <div className="space-y-1">
-                <Label className="text-[10px] uppercase font-black text-muted-foreground tracking-widest px-1">Portfolio UID</Label>
-                <div className="p-3 bg-muted/30 rounded-lg font-mono text-[10px] text-muted-foreground break-all border border-dashed select-all cursor-copy">
-                  {user?.uid || "UNAUTHORIZED_ACCESS"}
-                </div>
-                <p className="text-[9px] text-muted-foreground italic px-1 mt-2">Use this ID to locate your document in the Firebase Console under /users/.</p>
-                {user && (
-                  <div className="pt-4 mt-4 border-t border-dashed flex items-center justify-between gap-3">
-                    <div className="space-y-0.5">
-                      <p className="text-[10px] font-black uppercase tracking-wider text-destructive">Account & Data Deletion</p>
-                      <p className="text-[10px] text-muted-foreground">Permanently erase your account and all portfolio data.</p>
-                    </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input
+                    value={deleteConfirmText}
+                    onChange={(e) => setDeleteConfirmText(e.target.value)}
+                    placeholder="Type DELETE to confirm"
+                    className="h-9 bg-[#FFFDF9] border-[#E8DFD1] text-sm"
+                  />
+                  <div className="flex gap-2">
                     <Button
                       type="button"
-                      variant="outline"
                       size="sm"
-                      disabled={isDeletingAccount}
-                      onClick={handleDeleteAccount}
-                      className="text-[10px] font-black uppercase tracking-wider text-destructive border-destructive/30 hover:bg-destructive/10 shrink-0 gap-1.5"
+                      variant="outline"
+                      onClick={() => {
+                        setShowDeletePanel(false);
+                        setDeleteConfirmText('');
+                      }}
+                      className="h-9 border-[#E8DFD1]"
                     >
-                      {isDeletingAccount ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                      Delete Account
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={
+                        isDeleting || deleteConfirmText.trim().toUpperCase() !== 'DELETE'
+                      }
+                      onClick={handleDeleteAccount}
+                      className="h-9 bg-[#C26D2D] hover:bg-[#AD5D23] text-white font-bold"
+                    >
+                      {isDeleting && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                      Delete Forever
                     </Button>
                   </div>
-                )}
+                </div>
               </div>
-            </CardContent>
-          </Card>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
-          <Button className="w-full gap-3 rounded-2xl h-14 shadow-xl text-sm font-black uppercase tracking-[0.2em] italic" onClick={() => prefs && handleSave(prefs, schedule)} disabled={isSaving}>
-            {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : savedRecently ? <Check className="w-5 h-5" /> : <Save className="w-5 h-5" />}
-            {isSaving ? "Saving..." : savedRecently ? "Saved" : "Save Changes"}
-          </Button>
-        </div>
-      </div>
+      {/* 6. Direct Feedback */}
+      <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-sm rounded-2xl overflow-hidden">
+        <CardHeader className="pb-3 border-b border-[#E8DFD1]/70">
+          <CardTitle className="text-base font-bold text-[#1F1B18] flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-[#C26D2D]" />
+            Send a Note to Coaster
+          </CardTitle>
+          <CardDescription className="text-xs text-[#6E6359]">
+            Spot a rough edge or want a new swap style added? Let us know directly.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <form onSubmit={handleFeedbackSubmit} className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <Input
+                value={feedbackName}
+                onChange={(e) => setFeedbackName(e.target.value)}
+                placeholder="Your name (optional)"
+                className="h-9 bg-[#FAF6F0] border-[#E8DFD1] text-sm"
+              />
+              <Input
+                type="email"
+                value={feedbackEmail}
+                onChange={(e) => setFeedbackEmail(e.target.value)}
+                placeholder="Reply email (optional)"
+                className="h-9 bg-[#FAF6F0] border-[#E8DFD1] text-sm"
+              />
+            </div>
+            <Textarea
+              value={feedbackMessage}
+              onChange={(e) => setFeedbackMessage(e.target.value)}
+              placeholder="Write your note here..."
+              rows={3}
+              className="bg-[#FAF6F0] border-[#E8DFD1] text-sm"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={sendingFeedback || !feedbackMessage.trim()}
+              className="rounded-full bg-[#1F1B18] hover:bg-[#352F2A] text-[#FAF6F0] px-4 text-xs font-bold"
+            >
+              {sendingFeedback ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Send className="w-3.5 h-3.5 mr-1.5" />
+              )}
+              Send Note
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }
