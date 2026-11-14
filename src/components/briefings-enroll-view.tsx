@@ -132,15 +132,15 @@ export function BriefingsEnrollView() {
   };
 
   return (
-    <div className="min-h-screen bg-[#FAF6F0] text-[#1F1B18] flex flex-col">
+    <div className="min-h-screen overflow-x-hidden bg-[#FAF6F0] text-[#1F1B18] flex flex-col">
       {/* Top Bar */}
       <header className="border-b border-[#E8DFD1] bg-[#FFFDF9]/90 backdrop-blur-md sticky top-0 z-20">
-        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-full bg-[#C26D2D] text-[#FFFDF9] flex items-center justify-center shadow-xs">
+        <div className="max-w-5xl mx-auto px-3 sm:px-6 h-16 flex items-center justify-between gap-2">
+          <Link href="/" className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-full bg-[#C26D2D] text-[#FFFDF9] flex items-center justify-center shadow-xs shrink-0">
               <Sunrise className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0">
               <span className="text-lg font-semibold tracking-tight font-['Newsreader',Georgia,serif]">
                 Coaster
               </span>
@@ -150,23 +150,25 @@ export function BriefingsEnrollView() {
             </div>
           </Link>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={handleCopyShareLink}
-              className="rounded-xl text-xs font-medium text-[#6E6359] hover:text-[#1F1B18] gap-1.5"
+              className="min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-[#6E6359] hover:text-[#1F1B18] gap-1.5 whitespace-nowrap"
             >
               {copiedLink ? (
                 <>
                   <Check className="w-3.5 h-3.5 text-[#3F7D58]" />
-                  Copied Link
+                  <span className="sm:hidden">Copied</span>
+                  <span className="hidden sm:inline">Copied Link</span>
                 </>
               ) : (
                 <>
                   <Copy className="w-3.5 h-3.5" />
-                  Share Page
+                  <span className="sm:hidden">Share</span>
+                  <span className="hidden sm:inline">Share Page</span>
                 </>
               )}
             </Button>
@@ -174,7 +176,7 @@ export function BriefingsEnrollView() {
               asChild
               variant="outline"
               size="sm"
-              className="rounded-xl text-xs font-semibold border-[#E8DFD1] bg-[#FFFDF9]"
+              className="min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-semibold border-[#E8DFD1] bg-[#FFFDF9] whitespace-nowrap"
             >
               <Link href="/">
                 Open Coaster
