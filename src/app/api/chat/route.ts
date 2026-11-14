@@ -78,10 +78,10 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error: entitlement.monthlyCapReached
-            ? `Monthly Executive AI allocation (${entitlement.freeLimit} turns/30d) reached. Your Zero-AI Cockpit, Ticker Quick-Log, and 3-Day Nutritionist remain active with zero limits until your cycle resets.`
+            ? `Your Coaster cloud turn limit (${entitlement.freeLimit} turns/30d) is reached for now. Today's Coaster, 1-Tap Presets, and Shorthand Terminal remain active anytime until your cycle resets.`
             : entitlement.requiresSignIn
-            ? 'Guest preview complete (3 free turns). Sign in free with Google to unlock your 10-audit starter pack or redeem a Friends & Family credit pass.'
-            : `You've used all ${entitlement.freeLimit} complimentary AI Coach audits. Retain the AI CFO for unlimited coaching, or use the Zero-AI Daily Cockpit & Quick Log free forever.`,
+            ? 'Guest preview complete (3 free cloud turns). Sign in free with Google to unlock your starter pack or use 1-Tap Presets and Shorthand Terminal anytime.'
+            : `You've used all ${entitlement.freeLimit} complimentary Sunny cloud audits. Keep using Today's Coaster, 1-Tap Presets, and Shorthand Terminal free forever.`,
           code: 'PAYWALL_LIMIT_REACHED',
           entitlement,
         },
@@ -191,7 +191,7 @@ export async function POST(req: Request) {
             const offerAfterTool = getShareOffer();
             if (offerAfterTool && !fullText.trim()) {
               const recoveredMsg =
-                `Logged **${offerAfterTool.label}** to your ledger. Your daily macros and cockpit have been updated.`;
+                `Logged **${offerAfterTool.label}** to today's coaster — your drink tally and trends are updated.`;
               fullText = recoveredMsg;
               controller.enqueue(encoder.encode(recoveredMsg));
               streamSucceeded = true;
@@ -217,15 +217,15 @@ export async function POST(req: Request) {
                 const lateOffer = getShareOffer();
                 if (lateOffer && !fullText.trim()) {
                   const recoveredMsg =
-                    `Logged **${lateOffer.label}** to your ledger. Your daily macros and cockpit have been updated.`;
+                    `Logged **${lateOffer.label}** to today's coaster — your drink tally and trends are updated.`;
                   fullText = recoveredMsg;
                   controller.enqueue(encoder.encode(recoveredMsg));
                   streamSucceeded = true;
                 } else {
                   controller.enqueue(
                     encoder.encode(
-                      `⚠️ **System Interruption**\n\nPartner, the Gemini neural ledger could not be reached.\n\n` +
-                        `I have received your message: *"${message}"*.\n\n**Diagnostics:** \`${fbDetail || detail}\`\n\nPlease try again in a minute.`
+                      `⚠️ **Connection Hiccup**\n\nI hit a brief connection bump reaching the cloud model just now.\n\n` +
+                        `I received your note: *"${message}"*.\n\n**Details:** \`${fbDetail || detail}\`\n\nPlease try again in a moment, or drop it straight into the Shorthand Terminal.`
                     )
                   );
                 }

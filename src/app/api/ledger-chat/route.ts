@@ -19,8 +19,8 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error: entitlement.requiresSignIn
-            ? 'Guest preview complete (5 free turns). Sign in free with Google or Email to unlock your full 15-audit starter pack or redeem a Friends & Family credit pass.'
-            : `You've used all ${entitlement.freeLimit} complimentary AI audits. Retain the AI CFO to unlock unlimited Ledger Analyst queries, or export your full CSV/JSON ledger free forever.`,
+            ? 'Guest preview complete (5 free turns). Sign in free with Google or Email to keep exploring your 90-day Coaster trends.'
+            : `You've used all ${entitlement.freeLimit} complimentary Sunny Trend Q&A audits. Export your full CSV/JSON coaster history anytime for free.`,
           code: 'PAYWALL_LIMIT_REACHED',
           entitlement,
         },
@@ -111,7 +111,7 @@ export async function POST(req: Request) {
             } catch (fbErr: any) {
               controller.enqueue(
                 encoder.encode(
-                  `⚠️ **Ledger Analyst Interruption**\n\nCould not complete query: \`${fbErr?.message ?? streamErr?.message ?? 'Unknown error'}\`. Please try again.`
+                  `⚠️ **Trend Q&A Connection Hiccup**\n\nI hit a brief connection bump checking your Coaster trends just now: \`${fbErr?.message ?? streamErr?.message ?? 'Unknown error'}\`. Please try again in a moment.`
                 )
               );
             }
