@@ -114,8 +114,8 @@ export function OutreachEnrollmentCard() {
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4 pt-1">
-                <div className="grid sm:grid-cols-3 gap-4">
-                  <div className="sm:col-span-2 space-y-1.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="sm:col-span-2 min-w-0 space-y-1.5">
                     <Label
                       htmlFor="outreach-email"
                       className="text-xs font-semibold text-[#4A4139]"
@@ -133,7 +133,7 @@ export function OutreachEnrollmentCard() {
                     />
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="min-w-0 space-y-1.5">
                     <Label
                       htmlFor="outreach-firstname"
                       className="text-xs font-semibold text-[#4A4139]"

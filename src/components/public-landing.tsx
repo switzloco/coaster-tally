@@ -169,8 +169,8 @@ export function PublicLanding({
       <section id="story" className="px-4 sm:px-6 pb-16">
         <div className="max-w-4xl mx-auto">
           <Card className="bg-[#FFFDF9] border-[#E8DFD1] rounded-3xl shadow-[0_6px_30px_rgba(31,27,24,0.05)] overflow-hidden">
-            <CardContent className="p-6 sm:p-10 grid md:grid-cols-[1.3fr,0.9fr] gap-8 items-center">
-              <div className="space-y-4">
+            <CardContent className="p-6 sm:p-10 grid grid-cols-1 md:grid-cols-[1.3fr,0.9fr] gap-8 items-center">
+              <div className="min-w-0 space-y-4">
                 <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#C26D2D]">
                   <Sunrise className="w-4 h-4" />
                   <span>A New Journey</span>
@@ -193,7 +193,7 @@ export function PublicLanding({
                 </p>
               </div>
 
-              <div className="rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-5 space-y-4">
+              <div className="min-w-0 rounded-2xl bg-[#FAF6F0] border border-[#E8DFD1] p-5 space-y-4">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-full bg-[#3F7D58]/15 text-[#3F7D58] flex items-center justify-center font-semibold text-sm">
                     S
@@ -242,7 +242,7 @@ export function PublicLanding({
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
             {[
               {
                 icon: <Beer className="w-6 h-6 text-[#C26D2D]" />,
@@ -314,7 +314,7 @@ export function PublicLanding({
             </h3>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <Card className="bg-[#FFFDF9] border-[#E8DFD1] rounded-2xl">
               <CardContent className="p-6 space-y-3">
                 <div className="flex items-center gap-2 text-[#C26D2D]">

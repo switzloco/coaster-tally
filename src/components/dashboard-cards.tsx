@@ -519,7 +519,7 @@ export function DashboardCards({ data, isLoading, onLogPour }: DashboardCardsPro
 
           {/* 3-Stat Coaster Rhythm Strip */}
           <div className="grid grid-cols-3 gap-2.5 mt-5">
-            <div className="rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3.5 py-2.5">
+            <div className="min-w-0 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3 sm:px-3.5 py-2.5">
               <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
                 7d Rolling Avg
               </p>
@@ -547,7 +547,7 @@ export function DashboardCards({ data, isLoading, onLogPour }: DashboardCardsPro
               </div>
             </div>
 
-            <div className="rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3.5 py-2.5">
+            <div className="min-w-0 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3 sm:px-3.5 py-2.5">
               <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
                 Clear Days (30d)
               </p>
@@ -557,7 +557,7 @@ export function DashboardCards({ data, isLoading, onLogPour }: DashboardCardsPro
               </p>
             </div>
 
-            <div className="rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3.5 py-2.5">
+            <div className="min-w-0 rounded-2xl bg-[#FFFDF9] border border-[#E8DFD1] px-3 sm:px-3.5 py-2.5">
               <p className="text-[10px] font-bold uppercase tracking-wider text-[#6E6359]">
                 30d Total
               </p>

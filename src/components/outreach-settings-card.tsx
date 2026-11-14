@@ -180,21 +180,21 @@ export function OutreachSettingsCard({ user, initialOutreach }: OutreachSettings
                   setCadence(opt.id);
                   if (opt.id !== 'pause' && !enabled) setEnabled(true);
                 }}
-                className={`rounded-xl border px-3 py-2 text-left transition-colors ${
+                className={`min-w-0 overflow-hidden rounded-xl border px-3 py-2 text-left transition-colors ${
                   cadence === opt.id
                     ? 'border-[#C26D2D] bg-[#FEF3C7]/45 text-[#1F1B18]'
                     : 'border-[#E8DFD1] bg-[#FAF6F0] text-[#6E6359] hover:text-[#1F1B18]'
                 }`}
               >
-                <div className="text-xs font-semibold">{opt.label}</div>
+                <div className="text-xs font-semibold truncate">{opt.label}</div>
                 <div className="text-[10px] opacity-80 truncate">{opt.summary}</div>
               </button>
             ))}
           </div>
         </div>
 
-        <div className="grid sm:grid-cols-2 gap-3">
-          <div className="space-y-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="min-w-0 space-y-1">
             <Label className="text-[11px] font-semibold uppercase tracking-wider text-[#6E6359] flex items-center gap-1.5">
               <Mail className="w-3 h-3 text-[#C26D2D]" />
               Delivery Email

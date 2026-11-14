@@ -189,11 +189,11 @@ export function BriefingsEnrollView() {
 
       {/* Main Content */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-10 md:py-14">
-        <div className="grid lg:grid-cols-12 gap-8 md:gap-10 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 md:gap-10 items-start">
           {/* Left Pitch & Sample Dispatches */}
-          <div className="lg:col-span-6 space-y-6">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#EAF3ED] border border-[#3F7D58]/30 text-[#2B5C3F] text-xs font-medium">
-              <Clock className="w-3.5 h-3.5 text-[#3F7D58]" />
+          <div className="lg:col-span-6 min-w-0 space-y-6">
+            <div className="inline-flex flex-wrap max-w-full items-center gap-2 px-3 py-1 rounded-full bg-[#EAF3ED] border border-[#3F7D58]/30 text-[#2B5C3F] text-xs font-medium">
+              <Clock className="w-3.5 h-3.5 text-[#3F7D58] shrink-0" />
               <span>+coaster@ 2-Way Email · No App-Open Required</span>
             </div>
 
@@ -212,7 +212,7 @@ export function BriefingsEnrollView() {
             {/* Sample 2-Window Preview */}
             <div className="space-y-3 pt-1">
               <div className="rounded-2xl border border-[#E8DFD1] bg-[#FFFDF9] p-4 space-y-1 shadow-xs">
-                <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-[#C26D2D]">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#C26D2D]">
                   <span>9:00 AM · Morning Reflection</span>
                   <span>Zero-Login Coaster</span>
                 </div>
@@ -226,7 +226,7 @@ export function BriefingsEnrollView() {
               </div>
 
               <div className="rounded-2xl border border-[#3F7D58]/30 bg-[#EAF3ED]/75 p-4 space-y-1 shadow-xs">
-                <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-[#2B5C3F]">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#2B5C3F]">
                   <span>7:00 PM · Evening Check-In</span>
                   <span>1-Tap or Plain Reply</span>
                 </div>
@@ -243,7 +243,7 @@ export function BriefingsEnrollView() {
           </div>
 
           {/* Right Enrollment Form Card */}
-          <div className="lg:col-span-6">
+          <div className="lg:col-span-6 min-w-0">
             <Card className="bg-[#FFFDF9] border border-[#E8DFD1] shadow-[0_10px_36px_rgba(31,27,24,0.06)] rounded-3xl overflow-hidden">
               <CardContent className="p-6 sm:p-8 space-y-6">
                 {enrolledResult ? (
@@ -385,18 +385,18 @@ export function BriefingsEnrollView() {
 
                     {/* Delivery Hours */}
                     <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
                         <Label className="text-xs font-semibold text-[#4A4139]">
                           Delivery Hours
                         </Label>
                         <span className="text-[11px] font-mono text-[#6E6359]">{timezone}</span>
                       </div>
-                      <div className="grid grid-cols-2 gap-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         <select
                           aria-label="Morning hour"
                           value={morningHour}
                           onChange={(e) => setMorningHour(Number(e.target.value))}
-                          className="h-10 rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] px-3 text-xs font-medium text-[#1F1B18]"
+                          className="w-full min-w-0 h-10 rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] px-3 text-xs font-medium text-[#1F1B18]"
                         >
                           {[6, 7, 8, 9, 10, 11].map((h) => (
                             <option key={h} value={h}>
@@ -410,7 +410,7 @@ export function BriefingsEnrollView() {
                           disabled={cadence === 'morning_only'}
                           value={nightHour}
                           onChange={(e) => setNightHour(Number(e.target.value))}
-                          className="h-10 rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] px-3 text-xs font-medium text-[#1F1B18] disabled:opacity-40"
+                          className="w-full min-w-0 h-10 rounded-xl border border-[#E8DFD1] bg-[#FAF6F0] px-3 text-xs font-medium text-[#1F1B18] disabled:opacity-40"
                         >
                           {[17, 18, 19, 20, 21, 22].map((h) => (
                             <option key={h} value={h}>
@@ -426,17 +426,17 @@ export function BriefingsEnrollView() {
                     <Button
                       type="submit"
                       disabled={isSubmitting}
-                      className="w-full h-12 rounded-2xl bg-[#C26D2D] hover:bg-[#A85B22] text-[#FFFDF9] text-sm font-semibold shadow-md gap-2"
+                      className="w-full whitespace-normal text-center h-auto min-h-[48px] py-3 px-4 leading-snug rounded-2xl bg-[#C26D2D] hover:bg-[#A85B22] text-[#FFFDF9] text-sm font-semibold shadow-md gap-2"
                     >
                       {isSubmitting ? (
                         <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Sending Welcome Guide...
+                          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                          <span>Sending Welcome Guide...</span>
                         </>
                       ) : (
                         <>
-                          <Sparkles className="w-4 h-4" />
-                          Send My Welcome Guide &amp; Start Check-Ins
+                          <Sparkles className="w-4 h-4 shrink-0" />
+                          <span>Send My Welcome Guide &amp; Start Check-Ins</span>
                         </>
                       )}
                     </Button>
